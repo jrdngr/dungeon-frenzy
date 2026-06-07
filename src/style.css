@@ -1,0 +1,40 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0d0f14;
+  color: #e6e8ee;
+  display: flex;
+  justify-content: center;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+}
+
+h1 {
+  margin: 4px 0;
+  font-size: 22px;
+  letter-spacing: 1px;
+  color: #d7c08a;
+}
+
+canvas {
+  background: #14171f;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  color: #8b93a7;
+}
