@@ -1,11 +1,31 @@
 // Pure effect resolution. These functions mutate entity HP/HoT/shield state
 // and record events/stats, but have no knowledge of rendering or input.
 
-import type { Entity, GameState, HotInstance } from "./types";
+import { hexDistance, hexEquals, inDisk } from "./hex";
+import type { ActionDef, Entity, GameState, Hex, HotInstance } from "./types";
 import { isParty } from "./types";
 
 export function findEntity(state: GameState, id: string): Entity | undefined {
   return state.entities.find((e) => e.id === id);
+}
+
+/** The living entity standing on `hex`, if any. Corpses don't block. */
+export function occupant(state: GameState, hex: Hex): Entity | undefined {
+  return state.entities.find((e) => e.alive && hexEquals(e.hex, hex));
+}
+
+/** Can this entity legally step onto `hex` right now? */
+export function canMoveTo(state: GameState, mover: Entity, hex: Hex): boolean {
+  return (
+    inDisk(hex, state.mapRadius) &&
+    hexDistance(mover.hex, hex) === 1 &&
+    occupant(state, hex) === undefined
+  );
+}
+
+/** Is `target` within `def`'s range of `caster`? Unlimited if no range set. */
+export function inRange(caster: Entity, def: ActionDef, target: Entity): boolean {
+  return def.range === undefined || hexDistance(caster.hex, target.hex) <= def.range;
 }
 
 export function fighters(state: GameState): Entity[] {

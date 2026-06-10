@@ -15,7 +15,8 @@ export type Targeting =
   | "ally-single" // one chosen living party member
   | "fighters" // both fighters (AoE heal)
   | "party-all" // all party members (enemy AoE)
-  | "self";
+  | "self"
+  | "hex"; // an adjacent free hex (movement)
 
 export type Effect =
   | { kind: "damage"; amount: number }
@@ -23,13 +24,17 @@ export type Effect =
   | { kind: "hot"; perTick: number; interval: number; duration: number }
   | { kind: "aoe-heal"; amount: number }
   | { kind: "aoe-damage"; amount: number }
-  | { kind: "shield"; amount: number; duration: number };
+  | { kind: "shield"; amount: number; duration: number }
+  | { kind: "move" };
 
 export interface ActionDef {
   id: string;
   name: string;
   castTime: number; // seconds
   manaCost?: number; // undefined = free
+  /** Max hex distance to the target; undefined = unlimited. For "hex"
+   * targeting this is the move distance (1 = one hex per move). */
+  range?: number;
   targeting: Targeting;
   effect: Effect;
 }
@@ -39,6 +44,7 @@ export interface ActionInstance {
   def: ActionDef;
   elapsed: number; // seconds elapsed into the cast
   targetId?: string;
+  targetHex?: Hex; // for "hex"-targeted actions (movement)
 }
 
 /** An active heal-over-time effect riding on an entity. */
@@ -99,6 +105,8 @@ export type GamePhase = "playing" | "won" | "lost";
 
 export interface GameState {
   entities: Entity[];
+  /** The battlefield is a hex disk of this radius centered on (0,0). */
+  mapRadius: number;
   selectedId?: string; // currently selected party member
   pendingActionId?: string; // action awaiting a target click
   phase: GamePhase;

@@ -6,12 +6,33 @@ import type { ActionDef } from "./types";
 
 const c = CONFIG;
 
+// --- Movement ---
+
+export const MOVE_PARTY: ActionDef = {
+  id: "move-party",
+  name: "Move",
+  castTime: c.fighter.moveTime, // same for fighter and healer
+  range: 1,
+  targeting: "hex",
+  effect: { kind: "move" },
+};
+
+export const MOVE_ENEMY: ActionDef = {
+  id: "move-enemy",
+  name: "Lumber",
+  castTime: c.enemy.moveTime,
+  range: 1,
+  targeting: "hex",
+  effect: { kind: "move" },
+};
+
 // --- Fighter ---
 
 export const FIGHTER_ATTACK: ActionDef = {
   id: "fighter-attack",
   name: "Attack",
   castTime: c.fighter.attack.castTime,
+  range: c.fighter.attack.range,
   targeting: "enemy",
   effect: { kind: "damage", amount: c.fighter.attack.damage },
 };
@@ -20,6 +41,7 @@ export const FIGHTER_HEAVY: ActionDef = {
   id: "fighter-heavy",
   name: "Heavy Swing",
   castTime: c.fighter.heavySwing.castTime,
+  range: c.fighter.heavySwing.range,
   targeting: "enemy",
   effect: { kind: "damage", amount: c.fighter.heavySwing.damage },
 };
@@ -43,6 +65,7 @@ export const FAST_HEAL: ActionDef = {
   name: "Fast Heal",
   castTime: c.healer.fastHeal.castTime,
   manaCost: c.healer.fastHeal.mana,
+  range: c.healer.healRange,
   targeting: "ally-single",
   effect: { kind: "heal", amount: c.healer.fastHeal.heal },
 };
@@ -52,6 +75,7 @@ export const SLOW_HEAL: ActionDef = {
   name: "Slow Heal",
   castTime: c.healer.slowHeal.castTime,
   manaCost: c.healer.slowHeal.mana,
+  range: c.healer.healRange,
   targeting: "ally-single",
   effect: { kind: "heal", amount: c.healer.slowHeal.heal },
 };
@@ -61,6 +85,7 @@ export const HEAL_OVER_TIME: ActionDef = {
   name: "Renew",
   castTime: c.healer.hot.castTime,
   manaCost: c.healer.hot.mana,
+  range: c.healer.healRange,
   targeting: "ally-single",
   effect: {
     kind: "hot",
@@ -75,6 +100,7 @@ export const AOE_HEAL: ActionDef = {
   name: "Group Heal",
   castTime: c.healer.aoeHeal.castTime,
   manaCost: c.healer.aoeHeal.mana,
+  range: c.healer.healRange,
   targeting: "fighters",
   effect: { kind: "aoe-heal", amount: c.healer.aoeHeal.heal },
 };
@@ -85,7 +111,8 @@ export const ENEMY_BASIC: ActionDef = {
   id: "enemy-basic",
   name: "Claw",
   castTime: c.enemy.basicAttack.castTime,
-  targeting: "ally-single", // resolved to a random living party member at cast start
+  range: c.enemy.basicAttack.range,
+  targeting: "ally-single", // resolved to a random *adjacent* party member at cast start
   effect: { kind: "damage", amount: c.enemy.basicAttack.damage },
 };
 
@@ -101,6 +128,7 @@ export const ENEMY_BASIC_ENRAGED: ActionDef = {
   id: "enemy-basic-enraged",
   name: "Frenzied Claw",
   castTime: c.enemy.enrage.basicAttack.castTime,
+  range: c.enemy.enrage.basicAttack.range,
   targeting: "ally-single",
   effect: { kind: "damage", amount: c.enemy.enrage.basicAttack.damage },
 };
@@ -118,10 +146,12 @@ export const FIGHTER_ACTIONS: ActionDef[] = [
   FIGHTER_ATTACK,
   FIGHTER_HEAVY,
   FIGHTER_BRACE,
+  MOVE_PARTY,
 ];
 export const HEALER_ACTIONS: ActionDef[] = [
   FAST_HEAL,
   SLOW_HEAL,
   HEAL_OVER_TIME,
   AOE_HEAL,
+  MOVE_PARTY,
 ];

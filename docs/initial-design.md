@@ -82,7 +82,7 @@ A minimal but playable slice that proves the core juggling loop.
 All of these numbers live in a single file (`src/game/config.ts`) so balancing is
 a one-file edit, and will be refined by playtesting.
 
-## Iteration 2 (current scope)
+## Iteration 2 (done)
 
 Iteration 1 proved the loop but had three fun problems: fighter orders were
 decision-free (one action, one target), healing capacity dwarfed incoming
@@ -143,6 +143,46 @@ Enemy HP **500** (enrage below 150). Fighter HP 60, Healer HP 50.
 drives the sim headlessly with scripted players: a smart triager wins ~100%
 in ~55–70s with occasional deaths, a Fast-Heal-spamming basic-attacker wins
 ~3%, and an AFK party always dies. Strategy and attention both matter.
+
+## Iteration 3 (current scope)
+
+Iteration 2's enemy picked Claw targets at random, so the healer ate hits no
+one could prevent. Iteration 3 makes protection a real, positional mechanic:
+a full hex battlefield, movement for everyone, and melee that fighters can
+body-block.
+
+### Battlefield & movement
+
+- The battlefield is a **hex disk of radius 3** (37 hexes). The party starts
+  on one side (fighters in front, healer behind); the Ogre starts across the
+  field and walks in, giving the player a few seconds of setup.
+- **Move** is an action like any other: pick an adjacent free hex, cast
+  (party 0.9s, Ogre 1.3s — the party can outmaneuver it), and the entity
+  relocates on completion. Destination legality is re-checked on arrival.
+- Dead bodies don't block movement.
+
+### Protection (the point of this iteration)
+
+- **Claw is melee (range 1)** and the Ogre only Claws what is *adjacent* —
+  if anything is in its face it attacks it and does not move. Fighters
+  standing between the Ogre and the healer therefore take every
+  single-target hit: body-blocking works because adjacency pins the enemy.
+- If nothing is adjacent, the Ogre lumbers one hex toward the **nearest**
+  living party member (sidestepping along equal distance when blocked).
+- **Roar is the only way to damage a protected healer**: global, every 4th
+  combat action (moves don't count), telegraphed by a long cast, warning
+  rings, and countdown pips — and at 12 damage it can never one-shot the
+  50 HP healer.
+- Fighter attacks are melee too, and **heals have range 3**, so the healer
+  positions meaningfully instead of hiding at the map edge.
+
+### Balance evidence
+
+Same harness, now with positional bots: smart play keeps healer Claw damage
+at **zero** (all healer damage arrives via Roar) and wins ~100% in ~58–73s;
+a sloppy walker leaks ~25 Claw damage onto the healer and wins ~1%; AFK
+always dies. No stalemates — enrage plus mana exhaustion still close out
+every fight.
 
 ## Tech
 

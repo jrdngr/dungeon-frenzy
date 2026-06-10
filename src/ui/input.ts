@@ -1,14 +1,23 @@
 // Click handling: the select -> action -> target state machine.
+// Targets are party members (heals) or hexes (movement).
 // Returns true when the player asked to restart (click on the end overlay).
 
 import type { Point } from "../game/hex";
+import { hexNeighbors } from "../game/hex";
 import { startAction } from "../game/engine";
-import { findEntity } from "../game/combat";
+import {
+  canMoveTo,
+  enemy,
+  fighters,
+  findEntity,
+  inRange,
+} from "../game/combat";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
 import {
   actionButtons,
   actionsFor,
+  hexAtPoint,
   pointInRect,
   pointInToken,
 } from "./layout";
@@ -16,17 +25,43 @@ import {
 /** Ability hotkeys map left-to-right onto the selected unit's action list. */
 export const ABILITY_KEYS = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"];
 
-/** Party members in slot order: top-to-bottom, then left-to-right (by hex).
- * Slot 0 -> key "1", slot 1 -> key "2", etc. Order is stable (positions are
- * fixed), so dead members keep their slot. */
+/** Party members in slot order: top-to-bottom, then left-to-right (by their
+ * starting hex row). Slot 0 -> key "1", slot 1 -> key "2", etc. Order is by
+ * id so it stays stable while entities move around the field. */
 export function partySlots(state: GameState): Entity[] {
   return state.entities
     .filter(isParty)
-    .sort((a, b) => a.hex.r - b.hex.r || a.hex.q - b.hex.q);
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function canAfford(e: Entity, def: ActionDef): boolean {
   return def.manaCost === undefined || e.mana >= def.manaCost;
+}
+
+/** Is this action currently usable at all (mana, range, somewhere to go)?
+ * Drives both input rejection and the greyed-out button state. */
+export function canUse(state: GameState, e: Entity, def: ActionDef): boolean {
+  if (!canAfford(e, def)) return false;
+  switch (def.targeting) {
+    case "enemy": {
+      const en = enemy(state);
+      return !!en && en.alive && inRange(e, def, en);
+    }
+    case "fighters":
+      return fighters(state).some((f) => f.alive && inRange(e, def, f));
+    case "hex":
+      return hexNeighbors(e.hex).some((h) => canMoveTo(state, e, h));
+    default:
+      return true;
+  }
+}
+
+function pendingDefFor(
+  state: GameState,
+  sel: Entity | undefined,
+): ActionDef | undefined {
+  if (!sel || !state.pendingActionId) return undefined;
+  return actionsFor(sel).find((a) => a.id === state.pendingActionId);
 }
 
 export function handleClick(state: GameState, p: Point): { restart: boolean } {
@@ -34,10 +69,12 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
     return { restart: true };
   }
 
-  // 1. Action buttons take priority when a unit is selected.
   const sel = state.selectedId
     ? findEntity(state, state.selectedId)
     : undefined;
+  const pendingDef = pendingDefFor(state, sel);
+
+  // 1. Action buttons take priority when a unit is selected.
   if (sel && sel.alive) {
     for (const b of actionButtons(sel)) {
       if (pointInRect(p, b.rect)) {
@@ -58,11 +95,21 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
       state.pendingActionId = undefined;
       return { restart: false };
     }
-    activateEntity(state, clicked);
+    targetOrSelect(state, sel, pendingDef, clicked);
     return { restart: false };
   }
 
-  // 3. Clicked empty space: cancel pending target, else clear selection.
+  // 3. While placing a move, clicking a legal hex orders it.
+  if (sel && sel.alive && pendingDef?.targeting === "hex") {
+    const hex = hexAtPoint(p);
+    if (canMoveTo(state, sel, hex)) {
+      startAction(state, sel.id, pendingDef, undefined, hex);
+      state.pendingActionId = undefined;
+      return { restart: false };
+    }
+  }
+
+  // 4. Clicked empty space: cancel pending target, else clear selection.
   if (state.pendingActionId) {
     state.pendingActionId = undefined;
   } else {
@@ -79,10 +126,15 @@ export function handleKey(state: GameState, rawKey: string): { restart: boolean 
   }
   const key = rawKey.toLowerCase();
 
-  // Number keys select (or, while targeting, target) a party member by slot.
+  // Number keys select (or, while heal-targeting, target) a party member.
   if (key >= "1" && key <= "9") {
     const slot = partySlots(state)[Number(key) - 1];
-    if (slot && slot.alive) activateEntity(state, slot);
+    if (slot && slot.alive) {
+      const sel = state.selectedId
+        ? findEntity(state, state.selectedId)
+        : undefined;
+      targetOrSelect(state, sel, pendingDefFor(state, sel), slot);
+    }
     return { restart: false };
   }
 
@@ -98,19 +150,24 @@ export function handleKey(state: GameState, rawKey: string): { restart: boolean 
   return { restart: false };
 }
 
-/** Shared select-or-target behavior for both clicks and number-key presses. */
-function activateEntity(state: GameState, e: Entity): void {
-  if (!e.alive || !isParty(e)) return; // enemy isn't selectable/targetable
+/** Shared behavior for clicking/keying a party member: completes a pending
+ * single-target action when valid, otherwise selects. An out-of-range ally
+ * keeps targeting active (the rings show who is legal). */
+function targetOrSelect(
+  state: GameState,
+  sel: Entity | undefined,
+  pendingDef: ActionDef | undefined,
+  e: Entity,
+): void {
+  if (!e.alive || !isParty(e)) return;
 
-  const sel = state.selectedId ? findEntity(state, state.selectedId) : undefined;
-  if (state.pendingActionId && sel) {
-    // Awaiting a target: this party member completes the action.
-    const def = actionsFor(sel).find((a) => a.id === state.pendingActionId);
-    if (def) startAction(state, sel.id, def, e.id);
-    state.pendingActionId = undefined;
+  if (sel && pendingDef?.targeting === "ally-single") {
+    if (inRange(sel, pendingDef, e)) {
+      startAction(state, sel.id, pendingDef, e.id);
+      state.pendingActionId = undefined;
+    }
     return;
   }
-  // Otherwise select it.
   state.selectedId = e.id;
   state.pendingActionId = undefined;
 }
@@ -120,10 +177,11 @@ function onActionButton(state: GameState, def: ActionDef): void {
     ? findEntity(state, state.selectedId)
     : undefined;
   if (!sel || !sel.alive) return;
-  if (!canAfford(sel, def)) return; // button renders greyed out
+  if (!canUse(state, sel, def)) return; // button renders greyed out
 
   switch (def.targeting) {
     case "ally-single":
+    case "hex":
       // Needs a target click next; pressing the same action again cancels.
       state.pendingActionId =
         state.pendingActionId === def.id ? undefined : def.id;

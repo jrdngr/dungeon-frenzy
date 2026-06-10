@@ -6,22 +6,27 @@ import {
   ENEMY_AOE_ENRAGED,
   ENEMY_BASIC,
   ENEMY_BASIC_ENRAGED,
+  MOVE_ENEMY,
 } from "./actions";
 import {
   applyDamage,
   applyHeal,
   applyHot,
   applyShield,
+  canMoveTo,
   enemy,
   fighters,
   findEntity,
+  inRange,
   livingParty,
   tickHots,
 } from "./combat";
+import { hexDistance, hexNeighbors } from "./hex";
 import type {
   ActionDef,
   Entity,
   GameState,
+  Hex,
   HotInstance,
 } from "./types";
 import { isParty } from "./types";
@@ -29,14 +34,14 @@ import { isParty } from "./types";
 /** How long finished events are kept around for the UI to animate. */
 const EVENT_TTL = 3.0;
 
-/** Build a fresh battle: 2 fighters + 1 healer vs 1 enemy, fixed positions.
- * Layout (axial, pointy-top): enemy in front (top), fighters side by side,
- * healer behind (bottom). */
+/** Build a fresh battle on a hex-disk battlefield: the party holds one side,
+ * the enemy starts across the field and walks in. Fighters begin between the
+ * enemy and the healer — the wall the player is meant to maintain. */
 export function createInitialState(): GameState {
   const entities: Entity[] = [
     makeEntity("enemy", "enemy", "Ogre", CONFIG.enemy.maxHp, 0, {
-      q: 1,
-      r: -1,
+      q: 2,
+      r: -3,
     }),
     makeEntity("fighter-a", "fighter", "Fighter A", CONFIG.fighter.maxHp, 0, {
       q: 0,
@@ -52,12 +57,13 @@ export function createInitialState(): GameState {
       "Healer",
       CONFIG.healer.maxHp,
       CONFIG.healer.maxMana,
-      { q: 0, r: 1 },
+      { q: 0, r: 2 },
     ),
   ];
 
   const state: GameState = {
     entities,
+    mapRadius: CONFIG.map.radius,
     phase: "playing",
     elapsedTime: 0,
     events: [],
@@ -102,7 +108,8 @@ function makeEntity(
   };
 }
 
-/** Begin an action on an entity, replacing whatever it was doing.
+/** Begin an action on an entity, replacing whatever it was doing. Validates
+ * mana, range, and move legality so an illegal order is simply ignored.
  * Mana is checked here but only spent when the cast completes, so replacing
  * a cast (or a mis-click) never wastes mana. */
 export function startAction(
@@ -110,29 +117,76 @@ export function startAction(
   casterId: string,
   def: ActionDef,
   targetId?: string,
+  targetHex?: Hex,
 ): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive) return;
   if (def.manaCost !== undefined && caster.mana < def.manaCost) return;
-  caster.current = { def, elapsed: 0, targetId };
+
+  if (def.effect.kind === "move") {
+    if (!targetHex || !canMoveTo(state, caster, targetHex)) return;
+    caster.current = { def, elapsed: 0, targetHex };
+    return;
+  }
+
+  // Range check against the explicit or implied target.
+  const target = targetId
+    ? findEntity(state, targetId)
+    : def.targeting === "enemy"
+      ? enemy(state)
+      : undefined;
+  if (target && !inRange(caster, def, target)) return;
+
+  caster.current = { def, elapsed: 0, targetId: target?.id ?? targetId };
 }
 
+/** Enemy decision-making:
+ * 1. Every Nth combat action is the (global, telegraphed) Roar.
+ * 2. Otherwise Claw a random adjacent party member — adjacency is what makes
+ *    body-blocking work: the enemy never walks past someone in its face.
+ * 3. Nothing adjacent: lumber one hex toward the nearest party member.
+ */
 function startEnemyAction(state: GameState): void {
   const e = enemy(state);
   if (!e || !e.alive) return;
+  const party = livingParty(state);
+  if (party.length === 0) return;
+
   const basic = e.enraged ? ENEMY_BASIC_ENRAGED : ENEMY_BASIC;
   const aoe = e.enraged ? ENEMY_AOE_ENRAGED : ENEMY_AOE;
-  const useAoe =
+
+  const roarDue =
     (e.actionCount + 1) % CONFIG.enemy.aoeEveryNthAction === 0;
-  if (useAoe) {
+  if (roarDue) {
     startAction(state, e.id, aoe);
-  } else {
-    // Basic attack picks a random living party member as its target now.
-    const targets = livingParty(state);
-    if (targets.length === 0) return;
-    const target = targets[Math.floor(Math.random() * targets.length)];
-    startAction(state, e.id, basic, target.id);
+    return;
   }
+
+  const adjacent = party.filter(
+    (p) => hexDistance(p.hex, e.hex) <= (basic.range ?? 1),
+  );
+  if (adjacent.length > 0) {
+    const target = adjacent[Math.floor(Math.random() * adjacent.length)];
+    startAction(state, e.id, basic, target.id);
+    return;
+  }
+
+  // Walk toward the nearest living party member.
+  let nearest = party[0];
+  for (const p of party) {
+    if (hexDistance(p.hex, e.hex) < hexDistance(nearest.hex, e.hex)) nearest = p;
+  }
+  const options = hexNeighbors(e.hex).filter((h) => canMoveTo(state, e, h));
+  if (options.length === 0) return; // boxed in: retried next update
+  const currentDist = hexDistance(e.hex, nearest.hex);
+  let best = options.filter((h) => hexDistance(h, nearest.hex) < currentDist);
+  if (best.length === 0) {
+    // Can't get closer (blocked): sidestep along equal distance if possible.
+    best = options.filter((h) => hexDistance(h, nearest.hex) === currentDist);
+  }
+  if (best.length === 0) return;
+  const dest = best[Math.floor(Math.random() * best.length)];
+  startAction(state, e.id, MOVE_ENEMY, undefined, dest);
 }
 
 /** Resolve a completed action's effect. */
@@ -146,6 +200,13 @@ function resolveAction(state: GameState, caster: Entity): void {
   }
 
   switch (def.effect.kind) {
+    case "move": {
+      // Re-check at arrival: someone may have stepped in during the cast.
+      if (inst.targetHex && canMoveTo(state, caster, inst.targetHex)) {
+        caster.hex = inst.targetHex;
+      }
+      break;
+    }
     case "damage": {
       const target = inst.targetId
         ? findEntity(state, inst.targetId)
@@ -181,7 +242,9 @@ function resolveAction(state: GameState, caster: Entity): void {
     }
     case "aoe-heal": {
       for (const f of fighters(state)) {
-        if (f.alive) applyHeal(state, f, def.effect.amount);
+        if (f.alive && inRange(caster, def, f)) {
+          applyHeal(state, f, def.effect.amount);
+        }
       }
       break;
     }
@@ -231,19 +294,24 @@ export function update(state: GameState, dt: number): void {
     if (!e.alive || !e.current) continue;
     e.current.elapsed += dt;
     if (e.current.elapsed >= e.current.def.castTime) {
+      const wasMove = e.current.def.effect.kind === "move";
       resolveAction(state, e);
       e.current = undefined;
       if (e.kind === "enemy") {
-        e.actionCount += 1;
+        // Only combat actions advance the Roar schedule.
+        if (!wasMove) e.actionCount += 1;
         // Enemy never idles — immediately queue the next action.
         if (e.alive) startEnemyAction(state);
       }
     }
   }
 
+  // 3b. If the enemy is idle (e.g. it was boxed in last decision), retry.
+  const en = enemy(state);
+  if (en && en.alive && !en.current) startEnemyAction(state);
+
   // 4. Enrage when the enemy drops below the threshold. The current cast
   // finishes as-is; the next action uses the enraged stats.
-  const en = enemy(state);
   if (
     en &&
     en.alive &&
