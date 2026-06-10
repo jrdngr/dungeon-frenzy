@@ -1,7 +1,12 @@
 // Headless balance check: scripted "players" of varying skill drive the sim.
 // Run: npx -y tsx scripts/sim-playtest.ts
 
-import { createInitialState, startAction, update } from "../src/game/engine.ts";
+import {
+  createInitialState,
+  issueOrder,
+  startAction,
+  update,
+} from "../src/game/engine.ts";
 import {
   AOE_HEAL,
   FAST_HEAL,
@@ -124,6 +129,98 @@ const sloppyBot: Bot = (state) => {
 /** AFK player: nobody does anything. Should lose. */
 const afkBot: Bot = () => {};
 
+/** Queue-using player: same strategy as smartBot but banks the next order
+ * while casting (issueOrder) and stop-casts into Brace when a Roar threatens
+ * mid-Heavy-Swing. Measures how much slack the 1-slot queue grants. */
+const queueBot: Bot = (state) => {
+  const en = enemy(state);
+  if (!en || !en.alive) return;
+  const roarIncoming = en.current?.def.effect.kind === "aoe-damage";
+
+  for (const e of state.entities) {
+    if (e.kind !== "fighter" || !e.alive) continue;
+    if (hexDistance(e.hex, en.hex) > 1) {
+      if (!e.current) moveToward(state, e, en.hex);
+      continue;
+    }
+    // Same brace policy as smartBot (brace only when idle) so the queue's
+    // effect is measured with strategy held constant.
+    if (!e.current) {
+      issueOrder(
+        state,
+        e.id,
+        roarIncoming && !e.shield ? FIGHTER_BRACE : FIGHTER_HEAVY,
+      );
+    } else if (!e.queued) {
+      issueOrder(state, e.id, FIGHTER_HEAVY);
+    }
+  }
+
+  const healer = state.entities.find((e) => e.kind === "healer");
+  if (!healer || !healer.alive) return;
+  if (!healer.current && hexDistance(healer.hex, en.hex) <= 1) {
+    moveAway(state, healer, en.hex);
+    return;
+  }
+  const hurt = livingParty(state)
+    .map((p) => ({ p, missing: p.maxHp - p.hp }))
+    .sort((a, b) => b.missing - a.missing);
+  const worst = hurt[0];
+  if (!worst || worst.missing === 0) return;
+  if (!healer.current) {
+    if (!inRange(healer, FAST_HEAL, worst.p)) {
+      moveToward(state, healer, worst.p.hex);
+      return;
+    }
+    const pct = worst.p.hp / worst.p.maxHp;
+    if (pct < 0.3 && healer.mana >= (FAST_HEAL.manaCost ?? 0)) {
+      issueOrder(state, healer.id, FAST_HEAL, worst.p.id);
+    } else if (worst.missing >= 35 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
+      issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
+    } else if (
+      worst.missing >= 20 &&
+      worst.p.hots.length === 0 &&
+      healer.mana >= (HEAL_OVER_TIME.manaCost ?? 0)
+    ) {
+      issueOrder(state, healer.id, HEAL_OVER_TIME, worst.p.id);
+    } else if (worst.missing >= 14 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
+      issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
+    }
+  } else if (!healer.queued && worst.missing >= 35) {
+    // Bank the next big heal while this one casts (mana may regen by then).
+    issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
+  }
+};
+
+/** Degenerate queue spammer: keeps Fast Heal banked forever and basic-attacks.
+ * Must still lose (mana exhaustion + dropped orders) — guards the invariant
+ * that the queue doesn't grant infinite sustain. */
+const queueSloppyBot: Bot = (state) => {
+  const en = enemy(state);
+  if (!en || !en.alive) return;
+  for (const e of state.entities) {
+    if (e.kind !== "fighter" || !e.alive) continue;
+    if (hexDistance(e.hex, en.hex) > 1) {
+      if (!e.current) moveToward(state, e, en.hex);
+    } else if (!e.current || !e.queued) {
+      issueOrder(state, e.id, FIGHTER_ATTACK);
+    }
+  }
+  const healer = state.entities.find((e) => e.kind === "healer");
+  if (healer && healer.alive) {
+    const hurt = livingParty(state)
+      .filter((p) => p.hp < p.maxHp)
+      .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
+    if (hurt[0]) {
+      if (!healer.current && !inRange(healer, FAST_HEAL, hurt[0])) {
+        moveToward(state, healer, hurt[0].hex);
+      } else if (!healer.current || !healer.queued) {
+        issueOrder(state, healer.id, FAST_HEAL, hurt[0].id);
+      }
+    }
+  }
+};
+
 interface RunResult {
   state: GameState;
   healerClawDamage: number; // single-target damage the healer took
@@ -171,6 +268,7 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
   let timeouts = 0;
   let clawOnHealer = 0;
   let roarOnHealer = 0;
+  let drops = 0;
   for (let i = 0; i < runs; i++) {
     const r = runOne(bot, reactionDelay);
     if (r.state.phase === "won") {
@@ -181,12 +279,14 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
     totalDeaths += r.state.stats.deaths;
     clawOnHealer += r.healerClawDamage;
     roarOnHealer += r.healerRoarDamage;
+    drops += r.state.stats.ordersDropped;
   }
   const avgTime = wins ? (totalTime / wins).toFixed(1) : "-";
   console.log(
     `${name.padEnd(28)} win ${((wins / runs) * 100).toFixed(0).padStart(3)}%  ` +
       `avg kill ${avgTime}s  avg deaths ${(totalDeaths / runs).toFixed(2)}  ` +
-      `healer dmg claw/roar ${(clawOnHealer / runs).toFixed(1)}/${(roarOnHealer / runs).toFixed(1)}` +
+      `healer dmg claw/roar ${(clawOnHealer / runs).toFixed(1)}/${(roarOnHealer / runs).toFixed(1)}  ` +
+      `drops ${(drops / runs).toFixed(1)}` +
       (timeouts ? `  TIMEOUTS ${timeouts}` : ""),
   );
 }
@@ -194,5 +294,8 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
 summarize("smart, 0.3s reactions", smartBot, 0.3);
 summarize("smart, 1.0s reactions", smartBot, 1.0);
 summarize("smart, 2.0s reactions", smartBot, 2.0);
+summarize("queue, 1.0s reactions", queueBot, 1.0);
+summarize("queue, 2.0s reactions", queueBot, 2.0);
+summarize("queue-sloppy, 1.0s", queueSloppyBot, 1.0);
 summarize("sloppy, 0.5s reactions", sloppyBot, 0.5);
 summarize("afk", afkBot, 1.0);

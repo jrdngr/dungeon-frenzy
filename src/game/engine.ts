@@ -75,6 +75,7 @@ export function createInitialState(): GameState {
       damageBlocked: 0,
       idleSeconds: 0,
       deaths: 0,
+      ordersDropped: 0,
     },
   };
 
@@ -108,6 +109,32 @@ function makeEntity(
   };
 }
 
+/** Full legality check for an order: mana, move destination, target range.
+ * Used both when starting an action and when promoting a queued one. */
+function validateOrder(
+  state: GameState,
+  caster: Entity,
+  def: ActionDef,
+  targetId?: string,
+  targetHex?: Hex,
+): boolean {
+  if (!caster.alive) return false;
+  if (def.manaCost !== undefined && caster.mana < def.manaCost) return false;
+
+  if (def.effect.kind === "move") {
+    return targetHex !== undefined && canMoveTo(state, caster, targetHex);
+  }
+
+  const target = targetId
+    ? findEntity(state, targetId)
+    : def.targeting === "enemy"
+      ? enemy(state)
+      : undefined;
+  if (targetId && (!target || !target.alive)) return false;
+  if (target && !inRange(caster, def, target)) return false;
+  return true;
+}
+
 /** Begin an action on an entity, replacing whatever it was doing. Validates
  * mana, range, and move legality so an illegal order is simply ignored.
  * Mana is checked here but only spent when the cast completes, so replacing
@@ -120,24 +147,84 @@ export function startAction(
   targetHex?: Hex,
 ): void {
   const caster = findEntity(state, casterId);
-  if (!caster || !caster.alive) return;
-  if (def.manaCost !== undefined && caster.mana < def.manaCost) return;
+  if (!caster) return;
+  if (!validateOrder(state, caster, def, targetId, targetHex)) return;
 
   if (def.effect.kind === "move") {
-    if (!targetHex || !canMoveTo(state, caster, targetHex)) return;
     caster.current = { def, elapsed: 0, targetHex };
     return;
   }
-
-  // Range check against the explicit or implied target.
+  // Fighter attacks resolve their implied target now.
   const target = targetId
     ? findEntity(state, targetId)
     : def.targeting === "enemy"
       ? enemy(state)
       : undefined;
-  if (target && !inRange(caster, def, target)) return;
-
   caster.current = { def, elapsed: 0, targetId: target?.id ?? targetId };
+}
+
+/** Bank an order to auto-start when the current cast ends. Deliberately
+ * lenient (alive caster is enough): legality is re-checked at promotion so
+ * the player may queue a heal they can't afford *yet*. */
+export function queueAction(
+  state: GameState,
+  casterId: string,
+  def: ActionDef,
+  targetId?: string,
+  targetHex?: Hex,
+): void {
+  const caster = findEntity(state, casterId);
+  if (!caster || !caster.alive) return;
+  caster.queued = { def, elapsed: 0, targetId, targetHex };
+}
+
+/** The single entry point for player/bot orders: starts immediately when the
+ * unit is idle, otherwise banks the order in the one queued slot. */
+export function issueOrder(
+  state: GameState,
+  casterId: string,
+  def: ActionDef,
+  targetId?: string,
+  targetHex?: Hex,
+): void {
+  const caster = findEntity(state, casterId);
+  if (!caster || !caster.alive) return;
+  if (caster.current) queueAction(state, casterId, def, targetId, targetHex);
+  else startAction(state, casterId, def, targetId, targetHex);
+}
+
+/** Abort the current cast (free — mana is only spent on completion). Any
+ * queued order starts immediately: the emergency "stop and Brace" play. */
+export function cancelCast(state: GameState, casterId: string): void {
+  const caster = findEntity(state, casterId);
+  if (!caster || !caster.alive || !caster.current) return;
+  caster.current = undefined;
+  promoteQueued(state, caster);
+}
+
+/** Drop a banked order without touching the current cast. */
+export function clearQueue(state: GameState, casterId: string): void {
+  const caster = findEntity(state, casterId);
+  if (caster) caster.queued = undefined;
+}
+
+/** Try to start the queued order now that the unit is idle. If it has become
+ * illegal (target died, mana spent, hex taken) it is dropped *loudly* — a
+ * silently lost order is the worst failure mode of a queue. */
+function promoteQueued(state: GameState, e: Entity): void {
+  if (!e.queued || e.current || !e.alive) return;
+  const q = e.queued;
+  e.queued = undefined;
+  startAction(state, e.id, q.def, q.targetId, q.targetHex);
+  if (!e.current) {
+    state.stats.ordersDropped += 1;
+    state.events.push({
+      kind: "queue-dropped",
+      entityId: e.id,
+      actionName: q.def.name,
+      at: state.elapsedTime,
+    });
+  }
 }
 
 /** Enemy decision-making:
@@ -302,7 +389,18 @@ export function update(state: GameState, dt: number): void {
         if (!wasMove) e.actionCount += 1;
         // Enemy never idles — immediately queue the next action.
         if (e.alive) startEnemyAction(state);
+      } else {
+        // Party: a banked order starts now (validated against the world as
+        // it is *after* this cast resolved and spent its mana).
+        promoteQueued(state, e);
       }
+    }
+  }
+
+  // 3a. Safety net: any idle party member with a banked order starts it.
+  for (const e of state.entities) {
+    if (isParty(e) && e.alive && !e.current && e.queued) {
+      promoteQueued(state, e);
     }
   }
 
@@ -322,9 +420,12 @@ export function update(state: GameState, dt: number): void {
     state.events.push({ kind: "enrage", entityId: en.id, at: state.elapsedTime });
   }
 
-  // 5. Clean up: dead casters drop their action; clear stale selection.
+  // 5. Clean up: dead casters drop their action and queue; clear stale selection.
   for (const e of state.entities) {
-    if (!e.alive && e.current) e.current = undefined;
+    if (!e.alive) {
+      if (e.current) e.current = undefined;
+      if (e.queued) e.queued = undefined;
+    }
   }
   if (state.selectedId) {
     const sel = findEntity(state, state.selectedId);

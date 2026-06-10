@@ -144,7 +144,7 @@ drives the sim headlessly with scripted players: a smart triager wins ~100%
 in ~55–70s with occasional deaths, a Fast-Heal-spamming basic-attacker wins
 ~3%, and an AFK party always dies. Strategy and attention both matter.
 
-## Iteration 3 (current scope)
+## Iteration 3 (done)
 
 Iteration 2's enemy picked Claw targets at random, so the healer ate hits no
 one could prevent. Iteration 3 makes protection a real, positional mechanic:
@@ -183,6 +183,60 @@ at **zero** (all healer damage arrives via Roar) and wins ~100% in ~58–73s;
 a sloppy walker leaks ~25 Claw damage onto the healer and wins ~1%; AFK
 always dies. No stalemates — enrage plus mana exhaustion still close out
 every fight.
+
+## Iteration 4 (current scope)
+
+Playtest feedback: "a lot to manage." The fix is NOT slower timers — pressure
+and excitement stay; the load moves off input bookkeeping and onto decisions.
+Three loads, three tools:
+
+### Input/deadline load → one-slot action queue
+
+- While a unit is casting, any order issued is **queued** (one slot, replaces
+  the previous queued order) and auto-starts when the cast ends. Units still
+  never act without an explicit player order — no auto-repeat.
+- **Lenient at enqueue, strict at start**: you may queue a heal you can't
+  afford yet (regen may cover it); legality (mana, range, target alive, hex
+  free) is re-checked at promotion, and an illegal order is dropped *loudly*
+  ("ORDER LOST" floating text, audio chirp, end-screen "Orders lost" stat).
+- Re-pressing a queued ability un-queues it. Queued orders are shown as a
+  "▸ next" chip on cast bars, in the party frames, and as a QUEUED tag on
+  the action button.
+- **X stops the current cast** (free — mana is only spent on completion) and
+  promotes the queue immediately. This preserves the clutch play the queue
+  would otherwise bury: mid-Heavy-Swing, Roar telegraphs → X, Brace.
+
+### Monitoring load → party frames + audio
+
+- **Party frames**: a fixed column of three unit panels (hotkey, name, HP,
+  mana, cast progress, queued order, IDLE/DEAD) on the left edge. Clicking a
+  frame is identical to clicking the token, so heal targeting never requires
+  finding a moving token.
+- **Audio cues** (`src/ui/audio.ts`, synthesized, no assets): a "ready" ping
+  when a unit finishes its cast — pitch identifies who (F1 low, F2 mid,
+  healer high) and fires once per transition (idling to bank mana is correct
+  play, so it never nags); a rising two-tone when Roar starts casting; an
+  enrage sting; a down-chirp when a queued order is dropped; win/lose
+  stingers. `M` mutes.
+
+### Execution load → fewer inputs per order
+
+- **Smart-cast**: re-pressing a pending single-target heal key casts it on
+  the lowest-HP-fraction wounded ally in range (explicit click-targeting
+  unchanged — pre-healing the Claw victim stays a skill play).
+- **Escape** cancels pending targeting / selection (replacing the old
+  re-press-to-cancel, which smart-cast now uses).
+
+### Balance evidence
+
+The queue grants slow hands near-perfect uptime: a 2.0s-reaction queue bot
+kills in ~55s — matching a 0.3s-reaction non-queue player's ~58s — but
+deaths stay meaningfully higher (≈0.6 vs ≈0.0) because queued orders
+auto-commit through crises; reading telegraphs still matters. A degenerate
+bot that queues Fast Heal forever still loses 100% (mana exhaustion), and
+dropped-order counts confirm the promotion-validation path fires in real
+fights. Enemy pacing deliberately unchanged this iteration; retune after
+play-feel (knobs in `config.ts`).
 
 ## Tech
 

@@ -26,6 +26,7 @@ import {
   hpBarRect,
   manaBarRect,
   PANEL,
+  partyFrameRect,
   progressBarRect,
   TOKEN_RADIUS,
   type Rect,
@@ -68,6 +69,7 @@ export function render(
   drawMoveTargets(ctx, state);
   drawTelegraphs(ctx, state);
   drawEntities(ctx, state);
+  drawPartyFrames(ctx, state);
   drawFloatingText(ctx, state);
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
@@ -284,6 +286,120 @@ function drawEntities(
   }
 }
 
+/** Fixed unit panels on the left: HP, mana, cast + queued order, idle flash.
+ * Clickable exactly like the unit's token, so healing never requires chasing
+ * a moving token with the mouse or the eyes. */
+function drawPartyFrames(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+): void {
+  const sel = state.selectedId ? findEntity(state, state.selectedId) : undefined;
+  const pendingDef =
+    sel && state.pendingActionId
+      ? actionsFor(sel).find((a) => a.id === state.pendingActionId)
+      : undefined;
+  const slots = partySlots(state);
+
+  slots.forEach((e, i) => {
+    const r = partyFrameRect(i);
+
+    ctx.fillStyle = "#10131a";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+
+    // Border tells the story: selected, legal heal target, idle, or calm.
+    let border = "#333a47";
+    let lw = 1;
+    let borderAlpha = 1;
+    if (e.id === state.selectedId) {
+      border = COLORS.selected;
+      lw = 2;
+    } else if (
+      sel &&
+      pendingDef?.targeting === "ally-single" &&
+      e.alive &&
+      inRange(sel, pendingDef, e)
+    ) {
+      border = COLORS.target;
+      lw = 1.5;
+    } else if (e.alive && !e.current && e.idleFor > 0.4) {
+      border = COLORS.idle;
+      lw = 2;
+      borderAlpha = 0.55 + 0.45 * Math.sin(state.elapsedTime * 7);
+    }
+    ctx.save();
+    ctx.globalAlpha = borderAlpha;
+    ctx.strokeStyle = border;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    ctx.restore();
+
+    // Header: hotkey + name (+ state tag).
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = COLORS.selected;
+    ctx.fillText(String(i + 1), r.x + 6, r.y + 5);
+    ctx.fillStyle = e.alive ? COLORS.text : "#6b7280";
+    ctx.fillText(e.name, r.x + 18, r.y + 5);
+    if (!e.alive) {
+      ctx.fillStyle = COLORS.hpLow;
+      ctx.textAlign = "right";
+      ctx.fillText("DEAD", r.x + r.w - 6, r.y + 5);
+    } else if (!e.current && e.idleFor > 0.4) {
+      ctx.fillStyle = COLORS.idle;
+      ctx.textAlign = "right";
+      ctx.fillText("IDLE", r.x + r.w - 6, r.y + 5);
+    }
+
+    // HP bar.
+    const hp: Rect = { x: r.x + 6, y: r.y + 20, w: r.w - 12, h: 10 };
+    bar(ctx, hp, "#1c2029");
+    const pct = e.maxHp > 0 ? e.hp / e.maxHp : 0;
+    bar(ctx, { ...hp, w: hp.w * pct }, hpColor(e, pct));
+    ctx.font = "bold 9px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(
+      `${Math.ceil(e.hp)}/${e.maxHp}`,
+      hp.x + hp.w / 2,
+      hp.y + hp.h / 2 + 1,
+    );
+
+    // Mana strip.
+    if (e.maxMana > 0 && e.alive) {
+      const mana: Rect = { x: hp.x, y: hp.y + hp.h + 2, w: hp.w, h: 4 };
+      bar(ctx, mana, "#1c2029");
+      bar(ctx, { ...mana, w: mana.w * (e.mana / e.maxMana) }, COLORS.mana);
+    }
+
+    // Cast progress + current/queued order.
+    if (e.alive) {
+      const cast: Rect = { x: hp.x, y: r.y + 40, w: hp.w, h: 5 };
+      bar(ctx, cast, "#1c2029");
+      let label = "—";
+      if (e.current) {
+        const pctCast = Math.min(1, e.current.elapsed / e.current.def.castTime);
+        bar(ctx, { ...cast, w: cast.w * pctCast }, COLORS.cast);
+        label = e.current.def.name;
+      }
+      if (e.queued) label += ` ▸ ${e.queued.def.name}`;
+      ctx.font = "9px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = e.queued ? COLORS.mana : COLORS.subtext;
+      ctx.fillText(label, cast.x, cast.y + 7, hp.w);
+    }
+  });
+}
+
+function hpColor(e: Entity, pct: number): string {
+  if (e.kind === "enemy") return COLORS.enemyHp;
+  if (pct > 0.5) return COLORS.hpFull;
+  if (pct > 0.25) return COLORS.hpMid;
+  return COLORS.hpLow;
+}
+
 function drawHpBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   const r = hpBarRect(e);
   const pct = e.maxHp > 0 ? e.hp / e.maxHp : 0;
@@ -370,18 +486,16 @@ function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
       : COLORS.cast;
   bar(ctx, { ...r, w: r.w * pct }, color);
 
-  // Action name under the bar.
+  // Action name under the bar (with the queued order chained on).
   ctx.fillStyle = isRoar ? COLORS.threat : COLORS.subtext;
   ctx.font = isRoar
     ? "bold 9px system-ui, sans-serif"
     : "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText(
-    isRoar ? `${e.current.def.name}!` : e.current.def.name,
-    r.x + r.w / 2,
-    r.y + r.h + 2,
-  );
+  let label = isRoar ? `${e.current.def.name}!` : e.current.def.name;
+  if (e.queued) label += ` ▸ ${e.queued.def.name}`;
+  ctx.fillText(label, r.x + r.w / 2, r.y + r.h + 2);
 }
 
 /** Floating combat text driven by sim events: damage, heals, blocks, enrage. */
@@ -441,6 +555,10 @@ function drawFloatingText(
       ctx.fillStyle = COLORS.shield;
       ctx.font = "bold 12px system-ui, sans-serif";
       ctx.fillText("BRACED", x, y);
+    } else if (ev.kind === "queue-dropped") {
+      ctx.fillStyle = COLORS.idle;
+      ctx.font = "bold 12px system-ui, sans-serif";
+      ctx.fillText("ORDER LOST", x, y);
     }
     ctx.globalAlpha = 1;
   }
@@ -502,6 +620,16 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
       PANEL.y + 28,
     );
   }
+  if (sel.current) {
+    ctx.fillStyle = COLORS.subtext;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText("casting — press to queue · X stops", PANEL.x + 14, PANEL.y + 46);
+  }
+  if (sel.queued) {
+    ctx.fillStyle = COLORS.mana;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText(`Next: ${sel.queued.def.name}`, PANEL.x + 14, PANEL.y + 62);
+  }
 
   actionButtons(sel).forEach((b, i) => {
     const isPending = state.pendingActionId === b.def.id;
@@ -514,6 +642,7 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
       isPending,
       hotkey,
       !canUse(state, sel, b.def),
+      sel.queued?.def.id === b.def.id,
     );
   });
 }
@@ -537,7 +666,7 @@ function drawStatusBar(
 
   ctx.textAlign = "right";
   ctx.fillText(
-    "1-3 select · Q/W/E/R/T abilities · Move: pick a hex",
+    "1-3 select · Q-T abilities (press while casting to queue) · X stop cast · Esc cancel · M mute",
     CANVAS.w - 12,
     12,
   );
@@ -565,6 +694,7 @@ function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState): void {
     ],
     ["Damage blocked", `${Math.round(s.damageBlocked)}`],
     ["Party idle time", `${s.idleSeconds.toFixed(1)}s`],
+    ["Orders lost", `${s.ordersDropped}`],
     ["Deaths", `${s.deaths}`],
   ];
 
@@ -615,12 +745,21 @@ function button(
   active: boolean,
   hotkey?: string,
   disabled?: boolean,
+  queued?: boolean,
 ): void {
   ctx.fillStyle = disabled ? "#13161c" : active ? "#2a2f1a" : "#1b2029";
   ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = active ? COLORS.selected : "#333a47";
-  ctx.lineWidth = active ? 2 : 1;
+  ctx.strokeStyle = active ? COLORS.selected : queued ? COLORS.mana : "#333a47";
+  ctx.lineWidth = active || queued ? 2 : 1;
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+  if (queued) {
+    ctx.fillStyle = COLORS.mana;
+    ctx.font = "bold 9px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillText("QUEUED", r.x + r.w - 6, r.y + 5);
+  }
 
   ctx.fillStyle = disabled ? "#5a6170" : COLORS.text;
   ctx.font = "bold 15px system-ui, sans-serif";

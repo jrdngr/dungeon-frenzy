@@ -59,6 +59,14 @@ export function progressBarRect(e: Entity): Rect {
   return { x: c.x - w / 2, y: c.y + TOKEN_RADIUS + 5, w, h: 6 };
 }
 
+/** Fixed-position party frame (HP/mana/cast panel) for slot `i` (0-based).
+ * A stable column on the left edge so the player's eyes have a home base
+ * instead of chasing tokens around the field. Callers pair these with
+ * partySlots() ordering. */
+export function partyFrameRect(i: number): Rect {
+  return { x: 12, y: 44 + i * 68, w: 150, h: 60 };
+}
+
 export interface ActionButton {
   def: ActionDef;
   rect: Rect;

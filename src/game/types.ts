@@ -71,6 +71,9 @@ export interface Entity {
   maxMana: number; // 0 = no mana bar
   hex: Hex;
   current?: ActionInstance; // undefined = idle
+  /** Party-only: one order banked while `current` casts. Auto-starts when the
+   * cast ends (re-validated then; dropped loudly if no longer legal). */
+  queued?: ActionInstance;
   hots: HotInstance[];
   shield?: ShieldInstance;
   alive: boolean;
@@ -88,7 +91,8 @@ export type GameEvent =
   | { kind: "damage"; entityId: string; amount: number; blocked: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
   | { kind: "shield"; entityId: string; amount: number; at: number }
-  | { kind: "enrage"; entityId: string; at: number };
+  | { kind: "enrage"; entityId: string; at: number }
+  | { kind: "queue-dropped"; entityId: string; actionName: string; at: number };
 
 /** Cumulative battle stats, shown on the end screen. */
 export interface Stats {
@@ -99,6 +103,8 @@ export interface Stats {
   damageBlocked: number;
   idleSeconds: number; // summed across living party members
   deaths: number;
+  /** Queued orders that were invalid by the time they would have started. */
+  ordersDropped: number;
 }
 
 export type GamePhase = "playing" | "won" | "lost";

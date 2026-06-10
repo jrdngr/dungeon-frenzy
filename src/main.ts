@@ -3,6 +3,7 @@
 import { createInitialState, update } from "./game/engine";
 import { render } from "./ui/render";
 import { handleClick, handleKey } from "./ui/input";
+import { toggleMute, unlock, updateAudio } from "./ui/audio";
 import type { Point } from "./game/hex";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement | null;
@@ -13,6 +14,7 @@ if (!ctx) throw new Error("Could not get 2D context");
 let state = createInitialState();
 
 canvas.addEventListener("click", (ev) => {
+  unlock(); // browsers only allow audio after a user gesture
   const rect = canvas.getBoundingClientRect();
   const p: Point = {
     x: (ev.clientX - rect.left) * (canvas.width / rect.width),
@@ -24,6 +26,11 @@ canvas.addEventListener("click", (ev) => {
 
 window.addEventListener("keydown", (ev) => {
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return; // leave browser shortcuts alone
+  unlock();
+  if (ev.key.toLowerCase() === "m") {
+    toggleMute();
+    return;
+  }
   const result = handleKey(state, ev.key);
   if (result.restart) state = createInitialState();
 });
@@ -36,6 +43,7 @@ function frame(now: number): void {
   last = now;
 
   update(state, dt);
+  updateAudio(state);
   render(ctx!, state);
 
   requestAnimationFrame(frame);
