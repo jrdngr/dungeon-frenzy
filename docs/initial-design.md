@@ -44,7 +44,7 @@ doesn't paint us into a corner:
 - **Leveling and skill trees** per party member.
 - **Multiple enemies** and richer enemy AI.
 
-## Iteration 1 (current scope)
+## Iteration 1 (done)
 
 A minimal but playable slice that proves the core juggling loop.
 
@@ -81,6 +81,68 @@ A minimal but playable slice that proves the core juggling loop.
 
 All of these numbers live in a single file (`src/game/config.ts`) so balancing is
 a one-file edit, and will be refined by playtesting.
+
+## Iteration 2 (current scope)
+
+Iteration 1 proved the loop but had three fun problems: fighter orders were
+decision-free (one action, one target), healing capacity dwarfed incoming
+damage so the fight had no loss threat, and the game gave too little feedback
+to read at speed. Iteration 2 fixes all three.
+
+### Decisions
+
+- **Fighter kit** — every re-order is now a small bet:
+  - **Attack** (2.2s, 10 dmg): low commitment, for reacting and finishing.
+  - **Heavy Swing** (5.0s, 27 dmg): best DPS, but locks the fighter in.
+  - **Brace** (1.2s): absorb up to 15 damage from the next hit within 6s.
+    Counters Roar and enraged Claws at the cost of attack uptime.
+- **Healer mana** — 80 max, +1.5/s. HP-per-mana: Slow Heal 3.0 > Renew 1.9 >
+  Group Heal 1.6 > Fast Heal 0.9. Regen sustains roughly the enemy's
+  normal-phase output via Slow Heal; the pool is the burst budget. Fast Heal
+  is the emergency button — spamming it is how you go OOM. Mana is checked at
+  cast start but only spent on completion, so mis-clicks never waste it.
+- **Enrage** — below 30% HP the Ogre permanently enrages: Claw 11 dmg/2.8s →
+  16 dmg/2.0s, Roar cast 6s → 4.5s. The finale is a race the party should
+  barely win, and it kills the "lone healer outlasts forever" stalemate
+  (mana exhaustion finishes the job).
+
+### Legibility
+
+- **Claw telegraph**: a dashed line from the Ogre to its victim while Claw is
+  casting — enables proactive pre-healing, the most fun healer play.
+- **Roar warning**: pulsing red rings on the whole party during the cast, and
+  pips over the Ogre counting Claws until the next Roar.
+- **Floating combat text** for damage, heals, blocks, and ENRAGED!, driven by
+  sim events (`GameState.events`).
+- **Idle alarm**: idle party members get a pulsing ring and "IDLE!" after
+  0.4s — noticing them is the core skill, so it's loud.
+- **End screen stats**: kill time, damage dealt, healing (and overheal),
+  damage blocked, party idle time, deaths — replay goals in one glance.
+
+### Current actions
+
+| Entity   | Action        | Cast | Cost | Effect                                  |
+| -------- | ------------- | ---- | ---- | --------------------------------------- |
+| Fighter  | Attack        | 2.2s | —    | 10 damage                                |
+| Fighter  | Heavy Swing   | 5.0s | —    | 27 damage                                |
+| Fighter  | Brace         | 1.2s | —    | Absorb 15 from the next hit within 6s    |
+| Healer   | Fast Heal     | 1.5s | 16   | Heal 14                                  |
+| Healer   | Slow Heal     | 4.0s | 14   | Heal 42                                  |
+| Healer   | Renew (HoT)   | 2.0s | 16   | Heal 5/sec for 6s (30 total)             |
+| Healer   | Group Heal    | 3.0s | 18   | Heal 14 to both fighters                 |
+| Enemy    | Claw          | 2.8s | —    | 11 damage to a random living member      |
+| Enemy    | Roar (AoE)    | 6.0s | —    | 12 damage to all (every 4th action)      |
+| Enraged  | Frenzied Claw | 2.0s | —    | 16 damage                                |
+| Enraged  | Roar (AoE)    | 4.5s | —    | 12 damage to all                         |
+
+Enemy HP **500** (enrage below 150). Fighter HP 60, Healer HP 50.
+
+### Balance evidence
+
+`scripts/sim-playtest.ts` (run with `npx -y tsx scripts/sim-playtest.ts`)
+drives the sim headlessly with scripted players: a smart triager wins ~100%
+in ~55–70s with occasional deaths, a Fast-Heal-spamming basic-attacker wins
+~3%, and an AFK party always dies. Strategy and attention both matter.
 
 ## Tech
 

@@ -36,6 +36,12 @@ export function hpBarRect(e: Entity): Rect {
   return { x: c.x - w / 2, y: c.y - TOKEN_RADIUS - 22, w, h: 13 };
 }
 
+/** Mana bar rect, a thin strip tucked under the HP bar. */
+export function manaBarRect(e: Entity): Rect {
+  const hp = hpBarRect(e);
+  return { x: hp.x, y: hp.y + hp.h + 1, w: hp.w, h: 5 };
+}
+
 /** Cast-progress bar rect, sitting below the token. */
 export function progressBarRect(e: Entity): Rect {
   const c = entityCenter(e);

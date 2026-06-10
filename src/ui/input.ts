@@ -25,6 +25,10 @@ export function partySlots(state: GameState): Entity[] {
     .sort((a, b) => a.hex.r - b.hex.r || a.hex.q - b.hex.q);
 }
 
+export function canAfford(e: Entity, def: ActionDef): boolean {
+  return def.manaCost === undefined || e.mana >= def.manaCost;
+}
+
 export function handleClick(state: GameState, p: Point): { restart: boolean } {
   if (state.phase !== "playing") {
     return { restart: true };
@@ -48,6 +52,12 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
     (e) => e.alive && pointInToken(p, e),
   );
   if (clicked) {
+    if (!isParty(clicked)) {
+      // The enemy can't be selected or healed; while targeting, treat the
+      // click as a cancel rather than silently ignoring it.
+      state.pendingActionId = undefined;
+      return { restart: false };
+    }
     activateEntity(state, clicked);
     return { restart: false };
   }
@@ -110,11 +120,13 @@ function onActionButton(state: GameState, def: ActionDef): void {
     ? findEntity(state, state.selectedId)
     : undefined;
   if (!sel || !sel.alive) return;
+  if (!canAfford(sel, def)) return; // button renders greyed out
 
   switch (def.targeting) {
     case "ally-single":
-      // Needs a target click next.
-      state.pendingActionId = def.id;
+      // Needs a target click next; pressing the same action again cancels.
+      state.pendingActionId =
+        state.pendingActionId === def.id ? undefined : def.id;
       break;
     case "enemy":
     case "fighters":
