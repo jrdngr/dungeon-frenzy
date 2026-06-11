@@ -65,6 +65,7 @@ export function createInitialState(): GameState {
     entities,
     mapRadius: CONFIG.map.radius,
     phase: "playing",
+    timeScale: 1,
     elapsedTime: 0,
     events: [],
     stats: {
@@ -348,29 +349,61 @@ function resolveAction(state: GameState, caster: Entity): void {
   }
 }
 
-/** Advance the whole simulation by dt seconds. */
+/** True when the idle rescue should be slowing the sim: some living party
+ * member has sat idle past the grace period. */
+function idleRescueActive(state: GameState): boolean {
+  return state.entities.some(
+    (e) =>
+      isParty(e) &&
+      e.alive &&
+      !e.current &&
+      e.idleFor >= CONFIG.time.idleGraceSeconds,
+  );
+}
+
+/** Advance the whole simulation by dt *real* seconds. The idle rescue may
+ * dilate the sim clock; everything below step 0 runs on game time. */
 export function update(state: GameState, dt: number): void {
   if (state.phase !== "playing") return;
 
-  state.elapsedTime += dt;
+  // 0. Idle rescue: ease timeScale toward the slow-mo floor while someone
+  // is idle past grace, and back to 1 once everyone has orders. The easing
+  // itself runs on real time so the ramp feels the same at any speed.
+  const t = CONFIG.time;
+  const target = idleRescueActive(state) ? t.slowMoScale : 1;
+  const span = 1 - t.slowMoScale; // full ramp distance
+  if (state.timeScale > target) {
+    state.timeScale = Math.max(
+      target,
+      state.timeScale - (span / t.rampDownSeconds) * dt,
+    );
+  } else if (state.timeScale < target) {
+    state.timeScale = Math.min(
+      target,
+      state.timeScale + (span / t.rampUpSeconds) * dt,
+    );
+  }
+  const sdt = dt * state.timeScale; // dilated game-time step
+
+  state.elapsedTime += sdt;
 
   // 1. Resources and timed effects.
   for (const e of state.entities) {
     if (e.alive && e.maxMana > 0) {
-      e.mana = Math.min(e.maxMana, e.mana + CONFIG.healer.manaRegen * dt);
+      e.mana = Math.min(e.maxMana, e.mana + CONFIG.healer.manaRegen * sdt);
     }
     if (e.shield) {
-      e.shield.remaining -= dt;
+      e.shield.remaining -= sdt;
       if (e.shield.remaining <= 0) e.shield = undefined;
     }
   }
-  tickHots(state, dt);
+  tickHots(state, sdt);
 
   // 2. Idle tracking (the player's core job is noticing these).
   for (const e of state.entities) {
     if (isParty(e) && e.alive && !e.current) {
-      e.idleFor += dt;
-      state.stats.idleSeconds += dt;
+      e.idleFor += sdt;
+      state.stats.idleSeconds += sdt;
     } else {
       e.idleFor = 0;
     }
@@ -379,7 +412,7 @@ export function update(state: GameState, dt: number): void {
   // 3. Advance casts and resolve completed ones.
   for (const e of state.entities) {
     if (!e.alive || !e.current) continue;
-    e.current.elapsed += dt;
+    e.current.elapsed += sdt;
     if (e.current.elapsed >= e.current.def.castTime) {
       const wasMove = e.current.def.effect.kind === "move";
       resolveAction(state, e);

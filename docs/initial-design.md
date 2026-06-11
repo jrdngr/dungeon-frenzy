@@ -184,7 +184,7 @@ a sloppy walker leaks ~25 Claw damage onto the healer and wins ~1%; AFK
 always dies. No stalemates — enrage plus mana exhaustion still close out
 every fight.
 
-## Iteration 4 (current scope)
+## Iteration 4 (done)
 
 Playtest feedback: "a lot to manage." The fix is NOT slower timers — pressure
 and excitement stay; the load moves off input bookkeeping and onto decisions.
@@ -237,6 +237,25 @@ bot that queues Fast Heal forever still loses 100% (mana exhaustion), and
 dropped-order counts confirm the promotion-validation path fires in real
 fights. Enemy pacing deliberately unchanged this iteration; retune after
 play-feel (knobs in `config.ts`).
+
+## Iteration 5 (current scope): idle-rescue slow-mo
+
+Iteration 4 cut the input bookkeeping, but the game still punishes *noticing
+late* more than *deciding badly*. The fix under test: when any living party
+member has been idle past a short grace period, the whole sim eases down to a
+slow-mo floor until everyone has orders again, then eases back to full speed.
+
+- A hard pause was considered and rejected for now: it turns the game
+  turn-based whenever the player falls behind, which fights the core frantic
+  fantasy. Slow-mo keeps enemy cast bars creeping, so urgency survives.
+- The grace period means players who keep everyone busy never see the effect
+  at all — the frantic feel is preserved for anyone keeping up.
+- Mechanically: `update()` takes real dt, eases `state.timeScale` toward the
+  target (easing runs on real time so ramps feel identical at any speed), and
+  the rest of the sim runs on the dilated clock. A vignette + "SLOW-MO" tag
+  shows why the world slowed. All knobs live in `config.ts` under `time`
+  (grace 1.0s, floor 0.25x, ramp down 0.5s / up 0.25s) — expect tuning after
+  play-feel.
 
 ## Tech
 

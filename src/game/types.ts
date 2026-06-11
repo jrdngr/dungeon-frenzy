@@ -116,7 +116,10 @@ export interface GameState {
   selectedId?: string; // currently selected party member
   pendingActionId?: string; // action awaiting a target click
   phase: GamePhase;
-  elapsedTime: number; // total seconds the battle has run
+  /** Sim-speed multiplier (1 = full speed). update() eases it toward the
+   * idle-rescue target; the UI reads it to show the slow-mo cue. */
+  timeScale: number;
+  elapsedTime: number; // total *game* seconds the battle has run
   events: GameEvent[];
   stats: Stats;
 }

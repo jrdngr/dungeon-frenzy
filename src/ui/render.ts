@@ -73,6 +73,7 @@ export function render(
   drawFloatingText(ctx, state);
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
+  if (state.phase === "playing") drawSlowMo(ctx, state);
 
   if (state.phase !== "playing") drawOverlay(ctx, state);
 }
@@ -652,6 +653,31 @@ function buttonSub(def: ActionDef): string {
   if (def.manaCost !== undefined) parts.push(`${def.manaCost} mana`);
   if (def.targeting === "enemy") parts.push("melee");
   return parts.join(" · ");
+}
+
+/** Idle-rescue cue: a cool vignette over the battlefield plus a SLOW-MO tag,
+ * both fading with how far the clock is dialed down so the ease in/out reads
+ * on screen instead of feeling like lag. */
+function drawSlowMo(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const span = 1 - CONFIG.time.slowMoScale;
+  const strength = Math.min(1, Math.max(0, (1 - state.timeScale) / span));
+  if (strength < 0.02) return;
+
+  const cx = PANEL.x + PANEL.w / 2;
+  const cy = PANEL.y / 2;
+  const g = ctx.createRadialGradient(cx, cy, PANEL.y * 0.45, cx, cy, PANEL.y);
+  g.addColorStop(0, "rgba(90, 169, 232, 0)");
+  g.addColorStop(1, `rgba(90, 169, 232, ${0.22 * strength})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, CANVAS.w, PANEL.y);
+
+  ctx.globalAlpha = strength;
+  ctx.fillStyle = COLORS.mana;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("◷ SLOW-MO — party member needs orders", cx, 12);
+  ctx.globalAlpha = 1;
 }
 
 function drawStatusBar(

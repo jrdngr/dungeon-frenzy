@@ -16,6 +16,16 @@ export const CONFIG = {
     radius: 3, // battlefield = hex disk of this radius
   },
 
+  // Idle rescue: once a party member has been idle past the grace period,
+  // the whole sim slows down so noticing late doesn't lose the fight to
+  // reaction time. Players who keep everyone busy never see it.
+  time: {
+    idleGraceSeconds: 1.0, // idle time before the slow-mo kicks in
+    slowMoScale: 0.25, // sim speed while the rescue is active
+    rampDownSeconds: 0.5, // real-time ease from full speed to the floor
+    rampUpSeconds: 0.25, // real-time ease back to full speed
+  },
+
   fighter: {
     maxHp: 60,
     moveTime: 0.9, // seconds per one-hex move
