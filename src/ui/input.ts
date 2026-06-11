@@ -94,7 +94,7 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
   const slots = partySlots(state);
   for (let i = 0; i < slots.length; i++) {
     if (pointInRect(p, partyFrameRect(i))) {
-      targetOrSelect(state, sel, pendingDef, slots[i]);
+      targetOrSelect(state, sel, pendingDef, slots[i], true);
       return { restart: false };
     }
   }
@@ -110,7 +110,7 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
       state.pendingActionId = undefined;
       return { restart: false };
     }
-    targetOrSelect(state, sel, pendingDef, clicked);
+    targetOrSelect(state, sel, pendingDef, clicked, true);
     return { restart: false };
   }
 
@@ -182,12 +182,15 @@ export function handleKey(state: GameState, rawKey: string): { restart: boolean 
 
 /** Shared behavior for clicking/keying a party member (token or frame):
  * completes a pending single-target action when valid, otherwise selects.
- * An out-of-range ally keeps targeting active (the rings show who is legal). */
+ * An out-of-range ally keeps targeting active (the rings show who is legal).
+ * With `toggle` (mouse clicks), re-clicking the selected unit deselects it;
+ * number-key selection never toggles. */
 function targetOrSelect(
   state: GameState,
   sel: Entity | undefined,
   pendingDef: ActionDef | undefined,
   e: Entity,
+  toggle = false,
 ): void {
   if (!e.alive || !isParty(e)) return;
 
@@ -198,7 +201,7 @@ function targetOrSelect(
     }
     return;
   }
-  state.selectedId = e.id;
+  state.selectedId = toggle && sel?.id === e.id ? undefined : e.id;
   state.pendingActionId = undefined;
 }
 
