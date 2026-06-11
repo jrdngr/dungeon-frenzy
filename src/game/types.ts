@@ -117,7 +117,7 @@ export interface GameState {
   pendingActionId?: string; // action awaiting a target click
   phase: GamePhase;
   /** Sim-speed multiplier (1 = full speed). update() eases it toward the
-   * idle-rescue target; the UI reads it to show the slow-mo cue. */
+   * tactical-pause target; the UI reads it to show the pause cue. */
   timeScale: number;
   elapsedTime: number; // total *game* seconds the battle has run
   events: GameEvent[];

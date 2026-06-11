@@ -349,29 +349,26 @@ function resolveAction(state: GameState, caster: Entity): void {
   }
 }
 
-/** True when the idle rescue should be slowing the sim: some living party
- * member has sat idle past the grace period. */
-function idleRescueActive(state: GameState): boolean {
-  return state.entities.some(
-    (e) =>
-      isParty(e) &&
-      e.alive &&
-      !e.current &&
-      e.idleFor >= CONFIG.time.idleGraceSeconds,
-  );
+/** True while the tactical pause should hold the sim: the player has a
+ * living, *idle* party member selected, i.e. they are choosing its order. */
+function tacticalPauseActive(state: GameState): boolean {
+  if (!state.selectedId) return false;
+  const sel = findEntity(state, state.selectedId);
+  return !!sel && isParty(sel) && sel.alive && !sel.current;
 }
 
-/** Advance the whole simulation by dt *real* seconds. The idle rescue may
+/** Advance the whole simulation by dt *real* seconds. The tactical pause may
  * dilate the sim clock; everything below step 0 runs on game time. */
 export function update(state: GameState, dt: number): void {
   if (state.phase !== "playing") return;
 
-  // 0. Idle rescue: ease timeScale toward the slow-mo floor while someone
-  // is idle past grace, and back to 1 once everyone has orders. The easing
-  // itself runs on real time so the ramp feels the same at any speed.
+  // 0. Tactical pause: ease the clock to a stop while an idle unit is
+  // selected, and back to full speed once it has orders or is deselected.
+  // The easing itself runs on real time so the ramp feels the same at any
+  // sim speed.
   const t = CONFIG.time;
-  const target = idleRescueActive(state) ? t.slowMoScale : 1;
-  const span = 1 - t.slowMoScale; // full ramp distance
+  const target = tacticalPauseActive(state) ? t.pausedScale : 1;
+  const span = 1 - t.pausedScale; // full ramp distance
   if (state.timeScale > target) {
     state.timeScale = Math.max(
       target,

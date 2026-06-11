@@ -238,24 +238,30 @@ dropped-order counts confirm the promotion-validation path fires in real
 fights. Enemy pacing deliberately unchanged this iteration; retune after
 play-feel (knobs in `config.ts`).
 
-## Iteration 5 (current scope): idle-rescue slow-mo
+## Iteration 5 (current scope): tactical pause on selecting an idle unit
 
 Iteration 4 cut the input bookkeeping, but the game still punishes *noticing
-late* more than *deciding badly*. The fix under test: when any living party
-member has been idle past a short grace period, the whole sim eases down to a
-slow-mo floor until everyone has orders again, then eases back to full speed.
+late* more than *deciding badly*. First attempt: automatic slow-mo (0.25x)
+whenever anyone idled past a 1s grace. Playtest: with three units to juggle,
+someone is nearly always idle, so the game lived in slow-mo and the effect
+stopped reading as a rescue. Replaced with a *player-triggered* pause:
 
-- A hard pause was considered and rejected for now: it turns the game
-  turn-based whenever the player falls behind, which fights the core frantic
-  fantasy. Slow-mo keeps enemy cast bars creeping, so urgency survives.
-- The grace period means players who keep everyone busy never see the effect
-  at all — the frantic feel is preserved for anyone keeping up.
-- Mechanically: `update()` takes real dt, eases `state.timeScale` toward the
-  target (easing runs on real time so ramps feel identical at any speed), and
-  the rest of the sim runs on the dilated clock. A vignette + "SLOW-MO" tag
-  shows why the world slowed. All knobs live in `config.ts` under `time`
-  (grace 1.0s, floor 0.25x, ramp down 0.5s / up 0.25s) — expect tuning after
-  play-feel.
+- **Selecting an idle party member eases the sim to a full stop.** Issuing
+  the order (or deselecting with Esc / clicking away) eases back to full
+  speed. No grace period — selection is already a deliberate act.
+- Deciding is free; **noticing is still the game.** Time only stops while
+  the player is actively choosing an idle unit's action, so idle units
+  nobody has selected keep bleeding uptime, and the world runs at full
+  speed whenever the player's attention is elsewhere.
+- Selecting a *casting* unit does not pause (there is no decision to make
+  yet — queueing can happen at speed), so cruising the party stays fluid.
+- Mechanically: `update()` takes real dt, eases `state.timeScale` toward
+  the target (easing runs on real time so ramps feel identical at any
+  speed), and the rest of the sim runs on the dilated clock. A vignette +
+  "PAUSED" tag shows why the world stopped. Knobs in `config.ts` under
+  `time` (paused speed 0, ramp down 0.3s / up 0.25s); `pausedScale` can be
+  raised above 0 to turn the pause back into slow-mo if full stop proves
+  too generous.
 
 ## Tech
 

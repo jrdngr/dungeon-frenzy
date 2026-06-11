@@ -73,7 +73,7 @@ export function render(
   drawFloatingText(ctx, state);
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
-  if (state.phase === "playing") drawSlowMo(ctx, state);
+  if (state.phase === "playing") drawPause(ctx, state);
 
   if (state.phase !== "playing") drawOverlay(ctx, state);
 }
@@ -655,11 +655,11 @@ function buttonSub(def: ActionDef): string {
   return parts.join(" · ");
 }
 
-/** Idle-rescue cue: a cool vignette over the battlefield plus a SLOW-MO tag,
- * both fading with how far the clock is dialed down so the ease in/out reads
- * on screen instead of feeling like lag. */
-function drawSlowMo(ctx: CanvasRenderingContext2D, state: GameState): void {
-  const span = 1 - CONFIG.time.slowMoScale;
+/** Tactical-pause cue: a cool vignette over the battlefield plus a PAUSED
+ * tag, both fading with how far the clock is dialed down so the ease in/out
+ * reads on screen instead of feeling like lag. */
+function drawPause(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const span = 1 - CONFIG.time.pausedScale;
   const strength = Math.min(1, Math.max(0, (1 - state.timeScale) / span));
   if (strength < 0.02) return;
 
@@ -676,7 +676,7 @@ function drawSlowMo(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.font = "bold 13px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillText("◷ SLOW-MO — party member needs orders", cx, 12);
+  ctx.fillText("◷ PAUSED — issue an order or press Esc to resume", cx, 12);
   ctx.globalAlpha = 1;
 }
 
