@@ -156,8 +156,9 @@ body-block.
 - The battlefield is a **hex disk of radius 3** (37 hexes). The party starts
   on one side (fighters in front, healer behind); the Ogre starts across the
   field and walks in, giving the player a few seconds of setup.
-- **Move** is an action like any other: pick an adjacent free hex, cast
-  (party 0.9s, Ogre 1.3s — the party can outmaneuver it), and the entity
+- **Move** is an action like any other but has no button: selecting a unit
+  highlights its adjacent free hexes, and clicking one orders the move. It
+  casts (party 0.9s, Ogre 1.3s — the party can outmaneuver it) and the entity
   relocates on completion. Destination legality is re-checked on arrival.
 - Dead bodies don't block movement.
 

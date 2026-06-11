@@ -1,10 +1,13 @@
 // Click handling: the select -> action -> target state machine.
-// Targets are party members (heals) or hexes (movement). Orders issued while
-// a unit is casting are queued (one slot) and auto-start when the cast ends.
+// Heals target party members; movement needs no button — with a unit
+// selected, clicking a highlighted adjacent hex orders the move. Orders
+// issued while a unit is casting are queued (one slot) and auto-start when
+// the cast ends.
 // Returns true when the player asked to restart (click on the end overlay).
 
 import type { Point } from "../game/hex";
 import { hexNeighbors } from "../game/hex";
+import { MOVE_PARTY } from "../game/actions";
 import { cancelCast, clearQueue, issueOrder } from "../game/engine";
 import {
   canMoveTo,
@@ -111,12 +114,12 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
     return { restart: false };
   }
 
-  // 4. While placing a move, clicking a legal hex orders it.
-  if (sel && sel.alive && pendingDef?.targeting === "hex") {
+  // 4. With a unit selected (and no heal-targeting pending), clicking a
+  //    legal adjacent hex orders a move — it casts/queues like any action.
+  if (sel && sel.alive && !state.pendingActionId) {
     const hex = hexAtPoint(p);
     if (canMoveTo(state, sel, hex)) {
-      issueOrder(state, sel.id, pendingDef, undefined, hex);
-      state.pendingActionId = undefined;
+      issueOrder(state, sel.id, MOVE_PARTY, undefined, hex);
       return { restart: false };
     }
   }
@@ -241,11 +244,6 @@ function onActionButton(state: GameState, def: ActionDef): void {
       } else {
         state.pendingActionId = def.id;
       }
-      break;
-    case "hex":
-      // Needs a hex click next; pressing the same action again cancels.
-      state.pendingActionId =
-        state.pendingActionId === def.id ? undefined : def.id;
       break;
     case "enemy":
     case "fighters":

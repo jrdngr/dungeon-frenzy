@@ -141,17 +141,17 @@ export const ENEMY_AOE_ENRAGED: ActionDef = {
   effect: { kind: "aoe-damage", amount: c.enemy.enrage.aoeAttack.damage },
 };
 
-/** Actions available to the player for each party-member kind. */
+/** Actions available to the player for each party-member kind. Movement has
+ * no button: selecting a unit highlights its legal hexes and clicking one
+ * issues MOVE_PARTY directly (see ui/input.ts). */
 export const FIGHTER_ACTIONS: ActionDef[] = [
   FIGHTER_ATTACK,
   FIGHTER_HEAVY,
   FIGHTER_BRACE,
-  MOVE_PARTY,
 ];
 export const HEALER_ACTIONS: ActionDef[] = [
   FAST_HEAL,
   SLOW_HEAL,
   HEAL_OVER_TIME,
   AOE_HEAL,
-  MOVE_PARTY,
 ];

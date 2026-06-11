@@ -12,6 +12,7 @@ import {
   findEntity,
   inRange,
 } from "../game/combat";
+import { MOVE_PARTY } from "../game/actions";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
@@ -96,16 +97,16 @@ function drawGrid(ctx: CanvasRenderingContext2D, state: GameState): void {
   }
 }
 
-/** While placing a move, light up the hexes the selected unit may step to. */
+/** With a unit selected, light up the hexes it may step to — clicking one
+ * orders a move directly (there is no Move button). Hidden while picking a
+ * heal target so the two click modes never overlap. */
 function drawMoveTargets(
   ctx: CanvasRenderingContext2D,
   state: GameState,
 ): void {
-  if (!state.pendingActionId || !state.selectedId) return;
+  if (!state.selectedId || state.pendingActionId) return;
   const sel = findEntity(state, state.selectedId);
-  if (!sel || !sel.alive) return;
-  const def = actionsFor(sel).find((a) => a.id === state.pendingActionId);
-  if (!def || def.targeting !== "hex") return;
+  if (!sel || !sel.alive || !isParty(sel)) return;
 
   for (const hex of hexNeighbors(sel.hex)) {
     if (!canMoveTo(state, sel, hex)) continue;
@@ -598,9 +599,17 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     ctx.fillText(
-      pendingDef.targeting === "hex"
-        ? "Click a highlighted hex to move there — or click empty space to cancel."
-        : "Choose a target (click a party member or press 1-3) — or click empty space to cancel.",
+      "Choose a target (click a party member or press 1-3) — or click empty space to cancel.",
+      PANEL.x + PANEL.w / 2,
+      PANEL.y + 10,
+    );
+  } else {
+    ctx.fillStyle = COLORS.subtext;
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText(
+      `Click a highlighted hex to move (${MOVE_PARTY.castTime.toFixed(1)}s).`,
       PANEL.x + PANEL.w / 2,
       PANEL.y + 10,
     );
