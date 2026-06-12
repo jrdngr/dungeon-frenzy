@@ -45,6 +45,9 @@ export interface ActionInstance {
   elapsed: number; // seconds elapsed into the cast
   targetId?: string;
   targetHex?: Hex; // for "hex"-targeted actions (movement)
+  /** Started by the engine (fighter auto-attack), not the player. Player
+   * orders replace an auto cast immediately instead of queueing behind it. */
+  auto?: boolean;
 }
 
 /** An active heal-over-time effect riding on an entity. */

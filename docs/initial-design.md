@@ -239,7 +239,7 @@ dropped-order counts confirm the promotion-validation path fires in real
 fights. Enemy pacing deliberately unchanged this iteration; retune after
 play-feel (knobs in `config.ts`).
 
-## Iteration 5 (current scope): tactical pause on selecting an idle unit
+## Iteration 5 (done): tactical pause on selecting an idle unit
 
 Iteration 4 cut the input bookkeeping, but the game still punishes *noticing
 late* more than *deciding badly*. First attempt: automatic slow-mo (0.25x)
@@ -263,6 +263,26 @@ stopped reading as a rescue. Replaced with a *player-triggered* pause:
   `time` (paused speed 0, ramp down 0.3s / up 0.25s); `pausedScale` can be
   raised above 0 to turn the pause back into slow-mo if full stop proves
   too generous.
+
+## Iteration 6 (current scope): fighters auto-attack
+
+Re-ordering the basic Attack was busywork: it was almost always the right
+default, so clicking it taught nothing. Now it *is* the default:
+
+- **Idle fighters cast Attack automatically** whenever the enemy is in range
+  and they have nothing banked. Out of range they stay idle (and the idle
+  alarm still fires) — positioning is still the player's job.
+- **Attack is gone from the action bar.** The fighter's buttons are Heavy
+  Swing and Brace: every fighter click is now a real decision (commit to the
+  big hit, defend, or move) layered over a sensible baseline.
+- **Player orders override.** Issuing an order to an auto-attacking fighter
+  replaces the swing immediately (no queueing behind it) — the auto cast is
+  flagged on the `ActionInstance` (`auto: true`) so the engine and UI can
+  tell it apart from a deliberate order. Orders issued during a *deliberate*
+  cast still queue as before.
+- **The tactical pause treats an auto-attacking fighter as idle**: selecting
+  it stops time, because the player selected it to choose an override — the
+  same decision moment as selecting a truly idle unit.
 
 ## Tech
 

@@ -6,6 +6,7 @@ import {
   ENEMY_AOE_ENRAGED,
   ENEMY_BASIC,
   ENEMY_BASIC_ENRAGED,
+  FIGHTER_ATTACK,
   MOVE_ENEMY,
 } from "./actions";
 import {
@@ -24,6 +25,7 @@ import {
 import { hexDistance, hexNeighbors } from "./hex";
 import type {
   ActionDef,
+  ActionInstance,
   Entity,
   GameState,
   Hex,
@@ -139,21 +141,22 @@ function validateOrder(
 /** Begin an action on an entity, replacing whatever it was doing. Validates
  * mana, range, and move legality so an illegal order is simply ignored.
  * Mana is checked here but only spent when the cast completes, so replacing
- * a cast (or a mis-click) never wastes mana. */
+ * a cast (or a mis-click) never wastes mana.
+ * Returns the started instance, or undefined if the order was illegal. */
 export function startAction(
   state: GameState,
   casterId: string,
   def: ActionDef,
   targetId?: string,
   targetHex?: Hex,
-): void {
+): ActionInstance | undefined {
   const caster = findEntity(state, casterId);
-  if (!caster) return;
-  if (!validateOrder(state, caster, def, targetId, targetHex)) return;
+  if (!caster) return undefined;
+  if (!validateOrder(state, caster, def, targetId, targetHex)) return undefined;
 
   if (def.effect.kind === "move") {
     caster.current = { def, elapsed: 0, targetHex };
-    return;
+    return caster.current;
   }
   // Fighter attacks resolve their implied target now.
   const target = targetId
@@ -162,6 +165,7 @@ export function startAction(
       ? enemy(state)
       : undefined;
   caster.current = { def, elapsed: 0, targetId: target?.id ?? targetId };
+  return caster.current;
 }
 
 /** Bank an order to auto-start when the current cast ends. Deliberately
@@ -180,7 +184,8 @@ export function queueAction(
 }
 
 /** The single entry point for player/bot orders: starts immediately when the
- * unit is idle, otherwise banks the order in the one queued slot. */
+ * unit is idle (an auto-attack counts as idle and is overridden), otherwise
+ * banks the order in the one queued slot. */
 export function issueOrder(
   state: GameState,
   casterId: string,
@@ -190,8 +195,11 @@ export function issueOrder(
 ): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive) return;
-  if (caster.current) queueAction(state, casterId, def, targetId, targetHex);
-  else startAction(state, casterId, def, targetId, targetHex);
+  if (caster.current && !caster.current.auto) {
+    queueAction(state, casterId, def, targetId, targetHex);
+  } else {
+    startAction(state, casterId, def, targetId, targetHex);
+  }
 }
 
 /** Abort the current cast (free — mana is only spent on completion). Any
@@ -277,6 +285,18 @@ function startEnemyAction(state: GameState): void {
   startAction(state, e.id, MOVE_ENEMY, undefined, dest);
 }
 
+/** Fighters never stand around swinging nothing: any idle fighter with no
+ * banked order auto-casts the basic Attack when the enemy is in range. The
+ * cast is flagged `auto` so a player order replaces it instead of queueing. */
+function startAutoAttacks(state: GameState): void {
+  for (const f of fighters(state)) {
+    if (!f.alive || f.current || f.queued) continue;
+    // startAction validates range etc.; only flag the cast if it began.
+    const started = startAction(state, f.id, FIGHTER_ATTACK);
+    if (started) started.auto = true;
+  }
+}
+
 /** Resolve a completed action's effect. */
 function resolveAction(state: GameState, caster: Entity): void {
   const inst = caster.current;
@@ -350,11 +370,14 @@ function resolveAction(state: GameState, caster: Entity): void {
 }
 
 /** True while the tactical pause should hold the sim: the player has a
- * living, *idle* party member selected, i.e. they are choosing its order. */
+ * living, *idle* party member selected, i.e. they are choosing its order.
+ * A fighter that is only auto-attacking counts as idle — the player selected
+ * it to override the auto swing, which is the same decision moment. */
 function tacticalPauseActive(state: GameState): boolean {
   if (!state.selectedId) return false;
   const sel = findEntity(state, state.selectedId);
-  return !!sel && isParty(sel) && sel.alive && !sel.current;
+  if (!sel || !isParty(sel) || !sel.alive) return false;
+  return !sel.current || !!sel.current.auto;
 }
 
 /** Advance the whole simulation by dt *real* seconds. The tactical pause may
@@ -434,7 +457,10 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // 3b. If the enemy is idle (e.g. it was boxed in last decision), retry.
+  // 3b. Idle fighters with nothing banked swing automatically (in range).
+  startAutoAttacks(state);
+
+  // 3c. If the enemy is idle (e.g. it was boxed in last decision), retry.
   const en = enemy(state);
   if (en && en.alive && !en.current) startEnemyAction(state);
 

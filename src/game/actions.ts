@@ -28,6 +28,9 @@ export const MOVE_ENEMY: ActionDef = {
 
 // --- Fighter ---
 
+/** The fighter's basic swing. Not on the action bar: idle fighters cast it
+ * automatically when the enemy is in range (see engine.ts), and any player
+ * order overrides it. */
 export const FIGHTER_ATTACK: ActionDef = {
   id: "fighter-attack",
   name: "Attack",
@@ -143,9 +146,9 @@ export const ENEMY_AOE_ENRAGED: ActionDef = {
 
 /** Actions available to the player for each party-member kind. Movement has
  * no button: selecting a unit highlights its legal hexes and clicking one
- * issues MOVE_PARTY directly (see ui/input.ts). */
+ * issues MOVE_PARTY directly (see ui/input.ts). The basic Attack has no
+ * button either — fighters cast it automatically while idle. */
 export const FIGHTER_ACTIONS: ActionDef[] = [
-  FIGHTER_ATTACK,
   FIGHTER_HEAVY,
   FIGHTER_BRACE,
 ];
