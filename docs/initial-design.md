@@ -331,10 +331,23 @@ The healer is always the implicit caster — there is no unit-selection step.
 Hotkeys (Q W E R) or clicking a spell button **arm** a spell; clicking an ally
 (or pressing 1–4) **casts** it and the spell **stays armed**. Re-pressing the
 armed spell's key smart-casts on the lowest-HP ally. Group Heal still needs a
-target click even though it hits everyone. Orders issued mid-cast queue (one
-slot) and auto-start when the cast ends (waiting if only blocked by
-mana/cooldown, dropped loudly if the target dies). `X` stops the cast, `Esc`
-clears the armed spell, `M` mutes.
+target click even though it hits everyone. **There is no queue:** an order
+issued mid-cast **replaces** the cast in progress (mana/cooldown only commit on
+completion, so interrupting wastes nothing); an unaffordable or cooling spell
+greys out and is ignored. `X` stops the cast, `Esc` clears the armed spell,
+`M` mutes.
+
+### Board + spell UI
+
+- **Only occupied hexes are drawn** — no empty filler. The five tiles are sized
+  large (`HEX_SIZE` in `layout.ts`) to fill the battle area, with the party
+  column centered.
+- **No overlapping bars.** Each party tile's HP/mana strip and cast bar are kept
+  narrow so neighbouring tiles' bars never collide; the enemy (no neighbors)
+  keeps a wider bar for its four-digit HP.
+- **Spell buttons show the heal amount** (`+22`, `+64`, `+20 all`) and mana cost.
+  Cast time and cooldown moved to a **hover tooltip** that lists all four stats
+  (heal, cast time, cooldown, mana).
 
 ### The point: a mana-starvation race
 

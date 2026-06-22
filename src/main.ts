@@ -12,16 +12,29 @@ const ctx = canvas.getContext("2d");
 if (!ctx) throw new Error("Could not get 2D context");
 
 let state = createInitialState();
+let mouse: Point | null = null;
+
+/** Translate a mouse event into canvas-space coordinates (the canvas is scaled
+ * by CSS, so client pixels must be mapped back to the 960x720 drawing buffer). */
+function canvasPoint(ev: MouseEvent): Point {
+  const rect = canvas!.getBoundingClientRect();
+  return {
+    x: (ev.clientX - rect.left) * (canvas!.width / rect.width),
+    y: (ev.clientY - rect.top) * (canvas!.height / rect.height),
+  };
+}
 
 canvas.addEventListener("click", (ev) => {
   unlock(); // browsers only allow audio after a user gesture
-  const rect = canvas.getBoundingClientRect();
-  const p: Point = {
-    x: (ev.clientX - rect.left) * (canvas.width / rect.width),
-    y: (ev.clientY - rect.top) * (canvas.height / rect.height),
-  };
-  const result = handleClick(state, p);
+  const result = handleClick(state, canvasPoint(ev));
   if (result.restart) state = createInitialState();
+});
+
+canvas.addEventListener("mousemove", (ev) => {
+  mouse = canvasPoint(ev);
+});
+canvas.addEventListener("mouseleave", () => {
+  mouse = null;
 });
 
 window.addEventListener("keydown", (ev) => {
@@ -46,7 +59,7 @@ function frame(now: number): void {
 
   update(state, dt);
   updateAudio(state);
-  render(ctx!, state);
+  render(ctx!, state, mouse);
 
   requestAnimationFrame(frame);
 }

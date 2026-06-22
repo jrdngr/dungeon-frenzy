@@ -49,8 +49,6 @@ export interface ActionInstance {
   /** Line attacks pick a second victim at cast start so the telegraph can show
    * both lines; it is re-validated when the hit lands. */
   secondaryTargetId?: string;
-  /** Started by the engine (auto-attack), not the player. */
-  auto?: boolean;
 }
 
 /** An active heal-over-time effect riding on an entity. */
@@ -71,10 +69,6 @@ export interface Entity {
   maxMana: number; // 0 = no mana bar
   hex: Hex;
   current?: ActionInstance; // undefined = idle
-  /** Party-only: one order banked while `current` casts. Auto-starts when the
-   * cast ends (re-validated then; dropped loudly if no longer legal, but kept
-   * waiting if only temporarily blocked by mana/cooldown). */
-  queued?: ActionInstance;
   hots: HotInstance[];
   /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready). */
   cooldowns: Record<string, number>;
@@ -90,8 +84,7 @@ export interface Entity {
 export type GameEvent =
   | { kind: "damage"; entityId: string; amount: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
-  | { kind: "enrage"; entityId: string; at: number }
-  | { kind: "queue-dropped"; entityId: string; actionName: string; at: number };
+  | { kind: "enrage"; entityId: string; at: number };
 
 /** Cumulative battle stats, shown on the end screen. */
 export interface Stats {
@@ -99,16 +92,12 @@ export interface Stats {
   healingDone: number; // effective healing (excludes overheal)
   overhealing: number;
   deaths: number;
-  /** Queued orders that were invalid by the time they would have started. */
-  ordersDropped: number;
 }
 
 export type GamePhase = "playing" | "won" | "lost";
 
 export interface GameState {
   entities: Entity[];
-  /** The battlefield is a hex disk of this radius centered on (0,0). */
-  mapRadius: number;
   /** The healer's currently armed spell, awaiting a target click. The healer is
    * the implicit, always-the-caster unit; there is no unit-selection step. */
   armedSpellId?: string;

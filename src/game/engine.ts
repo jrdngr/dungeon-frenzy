@@ -29,7 +29,7 @@ import type {
   GameState,
   HotInstance,
 } from "./types";
-import { isDPS, isParty } from "./types";
+import { isDPS } from "./types";
 
 /** How long finished events are kept around for the UI to animate. */
 const EVENT_TTL = 3.0;
@@ -50,7 +50,6 @@ export function createInitialState(): GameState {
 
   const state: GameState = {
     entities,
-    mapRadius: CONFIG.map.radius,
     phase: "playing",
     elapsedTime: 0,
     events: [],
@@ -59,7 +58,6 @@ export function createInitialState(): GameState {
       healingDone: 0,
       overhealing: 0,
       deaths: 0,
-      ordersDropped: 0,
     },
   };
 
@@ -93,42 +91,27 @@ function makeEntity(
   };
 }
 
-type OrderStatus = "ok" | "wait" | "drop";
-
-/** Classify an order against the world right now:
- * - "ok": legal, start it.
- * - "wait": temporarily blocked (not enough mana yet, or still on cooldown) but
- *   could become legal — a queued order should keep waiting, not be dropped.
- * - "drop": permanently illegal (caster/target dead) — drop loudly. */
-function classifyOrder(
-  state: GameState,
-  caster: Entity,
-  def: ActionDef,
-  targetId?: string,
-): OrderStatus {
-  if (!caster.alive) return "drop";
-
-  const target = targetId
-    ? findEntity(state, targetId)
-    : def.targeting === "enemy"
-      ? enemy(state)
-      : undefined;
-  if (targetId && (!target || !target.alive)) return "drop";
-  if (def.targeting === "enemy" && (!target || !target.alive)) return "drop";
-
-  if (def.manaCost !== undefined && caster.mana < def.manaCost) return "wait";
-  if ((caster.cooldowns[def.id] ?? 0) > 0) return "wait";
-  return "ok";
-}
-
-/** Full legality check for starting an action: target alive, mana, cooldown. */
+/** Full legality check for starting an action: caster + target alive, mana,
+ * cooldown. */
 function validateOrder(
   state: GameState,
   caster: Entity,
   def: ActionDef,
   targetId?: string,
 ): boolean {
-  return classifyOrder(state, caster, def, targetId) === "ok";
+  if (!caster.alive) return false;
+
+  const target = targetId
+    ? findEntity(state, targetId)
+    : def.targeting === "enemy"
+      ? enemy(state)
+      : undefined;
+  if (targetId && (!target || !target.alive)) return false;
+  if (def.targeting === "enemy" && (!target || !target.alive)) return false;
+
+  if (def.manaCost !== undefined && caster.mana < def.manaCost) return false;
+  if ((caster.cooldowns[def.id] ?? 0) > 0) return false;
+  return true;
 }
 
 /** Begin an action on an entity, replacing whatever it was doing. Validates
@@ -161,74 +144,26 @@ function startAction(
   return caster.current;
 }
 
-/** Bank an order to auto-start when the current cast ends. Deliberately lenient
- * (alive caster is enough): legality is re-checked at promotion, so the player
- * may queue a heal they can't afford or that's still on cooldown *yet*. */
-function queueAction(
-  state: GameState,
-  casterId: string,
-  def: ActionDef,
-  targetId?: string,
-): void {
-  const caster = findEntity(state, casterId);
-  if (!caster || !caster.alive) return;
-  caster.queued = { def, elapsed: 0, targetId };
-}
-
-/** The single entry point for player/bot orders: starts immediately when the
- * unit is idle (an auto-attack counts as idle and is overridden), otherwise
- * banks the order in the one queued slot. */
+/** The single entry point for player/bot orders. There is no queue: an order
+ * issued while the caster is already casting *replaces* that cast (mana/cooldown
+ * only commit on completion, so interrupting an in-progress cast wastes nothing).
+ * An illegal order (dead target, not enough mana, on cooldown) is ignored and
+ * leaves the current cast untouched. */
 export function issueOrder(
   state: GameState,
   casterId: string,
   def: ActionDef,
   targetId?: string,
 ): void {
-  const caster = findEntity(state, casterId);
-  if (!caster || !caster.alive) return;
-  if (caster.current && !caster.current.auto) {
-    queueAction(state, casterId, def, targetId);
-  } else {
-    startAction(state, casterId, def, targetId);
-  }
+  startAction(state, casterId, def, targetId);
 }
 
-/** Abort the current cast (free — mana/cooldown only commit on completion). Any
- * queued order starts immediately: the emergency "stop and re-cast" play. */
+/** Abort the current cast (free — mana/cooldown only commit on completion): the
+ * emergency "stop, then re-cast" play. */
 export function cancelCast(state: GameState, casterId: string): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive || !caster.current) return;
   caster.current = undefined;
-  promoteQueued(state, caster);
-}
-
-/** Drop a banked order without touching the current cast. */
-export function clearQueue(state: GameState, casterId: string): void {
-  const caster = findEntity(state, casterId);
-  if (caster) caster.queued = undefined;
-}
-
-/** Try to start the queued order now that the unit is idle. If it's only
- * temporarily blocked (mana/cooldown) it stays banked and waits; if it has become
- * permanently illegal (target died) it is dropped *loudly* — a silently lost
- * order is the worst failure mode of a queue. */
-function promoteQueued(state: GameState, e: Entity): void {
-  if (!e.queued || e.current || !e.alive) return;
-  const q = e.queued;
-  const status = classifyOrder(state, e, q.def, q.targetId);
-  if (status === "wait") return; // keep waiting; it may become castable
-  e.queued = undefined;
-  if (status === "ok") {
-    startAction(state, e.id, q.def, q.targetId);
-  } else {
-    state.stats.ordersDropped += 1;
-    state.events.push({
-      kind: "queue-dropped",
-      entityId: e.id,
-      actionName: q.def.name,
-      at: state.elapsedTime,
-    });
-  }
 }
 
 /** Which living party member the enemy single-target Claws: the tank, then a
@@ -277,13 +212,12 @@ function startEnemyAction(state: GameState): void {
   startAction(state, e.id, claw, clawTargetId(state));
 }
 
-/** Attackers never stand around: any idle tank/ranger/mage with no banked order
- * auto-casts its own attack. The cast is flagged `auto`. */
+/** Attackers never stand around: any idle tank/ranger/mage auto-casts its own
+ * attack. */
 function startAutoAttacks(state: GameState): void {
   for (const a of autoAttackers(state)) {
-    if (!a.alive || a.current || a.queued) continue;
-    const started = startAction(state, a.id, autoAttackFor(a.kind));
-    if (started) started.auto = true;
+    if (!a.alive || a.current) continue;
+    startAction(state, a.id, autoAttackFor(a.kind));
   }
 }
 
@@ -382,26 +316,14 @@ export function update(state: GameState, dt: number): void {
       if (e.kind === "enemy") {
         e.actionCount += 1;
         if (e.alive) startEnemyAction(state);
-      } else {
-        // Party: a banked order starts now (validated against the world as it is
-        // *after* this cast resolved and spent its mana / started its cooldown).
-        promoteQueued(state, e);
       }
     }
   }
 
-  // 2a. Safety net: any idle party member with a banked order tries to start it
-  // (or keeps waiting if it's only blocked by mana/cooldown).
-  for (const e of state.entities) {
-    if (isParty(e) && e.alive && !e.current && e.queued) {
-      promoteQueued(state, e);
-    }
-  }
-
-  // 2b. Idle attackers with nothing banked swing automatically.
+  // 2a. Idle attackers swing automatically.
   startAutoAttacks(state);
 
-  // 2c. Keep the enemy busy (it never idles while the party lives).
+  // 2b. Keep the enemy busy (it never idles while the party lives).
   const en = enemy(state);
   if (en && en.alive && !en.current && livingParty(state).length > 0) {
     startEnemyAction(state);
@@ -419,12 +341,9 @@ export function update(state: GameState, dt: number): void {
     state.events.push({ kind: "enrage", entityId: en.id, at: state.elapsedTime });
   }
 
-  // 4. Clean up: dead casters drop their action/queue; clear a stale armed spell.
+  // 4. Clean up: dead casters drop their action; clear a stale armed spell.
   for (const e of state.entities) {
-    if (!e.alive) {
-      e.current = undefined;
-      e.queued = undefined;
-    }
+    if (!e.alive) e.current = undefined;
   }
   if (state.armedSpellId) {
     const h = state.entities.find((e) => e.kind === "healer");

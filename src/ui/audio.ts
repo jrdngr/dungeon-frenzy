@@ -65,8 +65,8 @@ const SPELL_PITCHES: Record<string, number> = {
 
 /** Call once per frame after update(). Diffs against the previous frame and
  * emits cues for: a healer spell completing, a spell's cooldown returning, the
- * enemy's Cleave/Roar winding up, enrage, dropped orders, and win/lose. Safe to
- * call before unlock() (no-ops, but keeps the snapshots warm). */
+ * enemy's Cleave/Roar winding up, enrage, and win/lose. Safe to call before
+ * unlock() (no-ops, but keeps the snapshots warm). */
 export function updateAudio(state: GameState): void {
   // A restart resets elapsed time; reset our trackers with it.
   if (state.elapsedTime < lastEventAt) {
@@ -121,9 +121,6 @@ export function updateAudio(state: GameState): void {
     if (ev.kind === "enrage") {
       beep(110, 0.5, "sawtooth", 0.06);
       beep(98, 0.6, "sawtooth", 0.05, 0.1);
-    } else if (ev.kind === "queue-dropped") {
-      beep(420, 0.09, "triangle", 0.06);
-      beep(255, 0.16, "triangle", 0.06, 0.09);
     }
   }
   lastEventAt = state.elapsedTime;

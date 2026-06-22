@@ -28,27 +28,3 @@ export function hexCorners(center: Point, size: number): Point[] {
   }
   return corners;
 }
-
-/** Hex grid distance between two axial coordinates. */
-function hexDistance(a: Hex, b: Hex): number {
-  const dq = a.q - b.q;
-  const dr = a.r - b.r;
-  return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
-}
-
-/** Is `h` within a hex disk of the given radius centered on the origin? */
-function inDisk(h: Hex, radius: number): boolean {
-  return hexDistance(h, { q: 0, r: 0 }) <= radius;
-}
-
-/** All hexes in a disk of the given radius centered on the origin. */
-export function hexesInDisk(radius: number): Hex[] {
-  const out: Hex[] = [];
-  for (let q = -radius; q <= radius; q++) {
-    for (let r = -radius; r <= radius; r++) {
-      const h = { q, r };
-      if (inDisk(h, radius)) out.push(h);
-    }
-  }
-  return out;
-}

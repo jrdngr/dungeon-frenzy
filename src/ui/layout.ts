@@ -6,12 +6,14 @@ import { HEALER_ACTIONS } from "../game/actions";
 import type { ActionDef, Entity, Hex } from "../game/types";
 
 export const CANVAS = { w: 960, h: 720 };
-// Sized so a radius-3 hex disk (the whole battlefield) fits the battle area.
-export const HEX_SIZE = 46;
-// Origin = pixel center of hex (0,0), the middle of the disk.
-export const HEX_ORIGIN: Point = { x: 480, y: 272 };
+// Only the occupied hexes are drawn (no empty filler), so they're sized large to
+// fill the battle area: the party column spans 8 * HEX_SIZE vertically.
+export const HEX_SIZE = 60;
+// Origin = pixel center of hex (0,0), the tank's tile. Chosen so the column
+// (enemy two rows up, healer two rows down) is centered in the battle area.
+export const HEX_ORIGIN: Point = { x: 480, y: 285 };
 
-export const TOKEN_RADIUS = 22;
+export const TOKEN_RADIUS = 26;
 
 // Bottom action panel.
 export const PANEL = { x: 0, y: 545, w: CANVAS.w, h: CANVAS.h - 545 };
@@ -31,10 +33,12 @@ export function entityCenter(e: Entity): Point {
   return hexCenter(e.hex);
 }
 
-/** HP bar rect, sitting above the token. Tall enough to hold the HP number. */
+/** HP bar rect, sitting above the token. Kept narrow (so adjacent party tiles'
+ * bars never collide) — except the enemy, whose four-digit HP needs more room
+ * and which has no neighbors to overlap. */
 export function hpBarRect(e: Entity): Rect {
   const c = entityCenter(e);
-  const w = 60;
+  const w = e.kind === "enemy" ? 64 : 44;
   return { x: c.x - w / 2, y: c.y - TOKEN_RADIUS - 17, w, h: 11 };
 }
 
@@ -44,10 +48,11 @@ export function manaBarRect(e: Entity): Rect {
   return { x: hp.x, y: hp.y + hp.h + 1, w: hp.w, h: 4 };
 }
 
-/** Cast-progress bar rect, sitting below the token. */
+/** Cast-progress bar rect, sitting below the token. Narrow for party tiles
+ * (same reason as the HP bar); wider for the lone enemy. */
 export function progressBarRect(e: Entity): Rect {
   const c = entityCenter(e);
-  const w = 56;
+  const w = e.kind === "enemy" ? 60 : 44;
   return { x: c.x - w / 2, y: c.y + TOKEN_RADIUS + 5, w, h: 6 };
 }
 

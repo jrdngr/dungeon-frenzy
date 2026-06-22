@@ -1,12 +1,12 @@
 // Input handling for the healing game. The healer is the implicit, always-the-
 // caster unit — there is no unit-selection step. Hotkeys / buttons ARM a spell;
 // clicking a target ally casts it; the armed spell stays armed (sticky) so you
-// can keep clicking targets. Orders issued while the healer is casting are
-// queued (one slot) and auto-start when the cast ends.
+// can keep clicking targets. There is no queue: an order issued while the healer
+// is mid-cast replaces that cast (interrupting wastes nothing).
 // Returns restart=true when any input dismisses the end screen.
 
 import type { Point } from "../game/hex";
-import { cancelCast, clearQueue, issueOrder } from "../game/engine";
+import { cancelCast, issueOrder } from "../game/engine";
 import { HEALER_ACTIONS } from "../game/actions";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
@@ -49,14 +49,13 @@ function offCooldown(e: Entity, def: ActionDef): boolean {
 }
 
 /** Is this spell castable right now? Drives input rejection and the greyed-out
- * button. While the healer is casting, mana and cooldown are NOT checked: a
- * queued order may rely on regen / the cooldown clearing and is re-validated
- * when it actually starts. */
+ * button. With no queue, an order takes effect immediately (replacing any cast
+ * in progress), so mana and cooldown are always checked. */
 export function canUse(state: GameState, def: ActionDef): boolean {
   const h = healerOf(state);
   if (!h || !h.alive) return false;
-  if (!h.current && !canAfford(h, def)) return false;
-  if (!h.current && !offCooldown(h, def)) return false;
+  if (!canAfford(h, def)) return false;
+  if (!offCooldown(h, def)) return false;
   return true;
 }
 
@@ -108,7 +107,7 @@ export function handleKey(
   }
 
   // Stop-cast: abort the healer's current cast. Mana/cooldown only commit on
-  // completion, so this is free; a queued order then starts immediately.
+  // completion, so this is free.
   if (key === "x") {
     const h = healerOf(state);
     if (h) cancelCast(state, h.id);
@@ -124,7 +123,7 @@ export function handleKey(
   return { restart: false };
 }
 
-/** Cast the armed spell on `ally` (queues if the healer is mid-cast). The spell
+/** Cast the armed spell on `ally` (replacing any cast in progress). The spell
  * stays armed afterward so you can keep clicking targets. */
 function castOnTarget(state: GameState, ally: Entity): void {
   if (!ally.alive || !isParty(ally)) return;
@@ -147,12 +146,6 @@ function smartCastTarget(state: GameState): Entity | undefined {
 function onSpellButton(state: GameState, def: ActionDef): void {
   const h = healerOf(state);
   if (!h || !h.alive) return;
-
-  // Re-pressing a spell that's already queued un-queues it.
-  if (h.queued?.def.id === def.id) {
-    clearQueue(state, h.id);
-    return;
-  }
 
   if (!canUse(state, def)) return; // button renders greyed out
 

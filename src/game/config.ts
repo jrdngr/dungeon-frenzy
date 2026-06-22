@@ -25,10 +25,6 @@
 //   enrage.hpFraction (finale timing).
 
 export const CONFIG = {
-  map: {
-    radius: 3, // battlefield = hex disk of this radius (visual only)
-  },
-
   // --- Party damage dealers (AI auto-attackers; the player can't control them) ---
   // They stand still and swing on a timer; total party DPS sets the kill clock.
   tank: {

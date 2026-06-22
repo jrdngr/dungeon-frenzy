@@ -1,6 +1,6 @@
 // All canvas drawing. Reads GameState; never mutates it.
 
-import { hexCorners, hexesInDisk, type Point } from "../game/hex";
+import { hexCorners, type Point } from "../game/hex";
 import { enemy as findEnemy, findEntity } from "../game/combat";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
@@ -10,12 +10,12 @@ import {
   actionButtons,
   CANVAS,
   entityCenter,
-  hexCenter,
   HEX_SIZE,
   hpBarRect,
   manaBarRect,
   PANEL,
   partyFrameRect,
+  pointInRect,
   progressBarRect,
   TOKEN_RADIUS,
   type Rect,
@@ -50,7 +50,11 @@ const COLORS = {
 /** Seconds a floating combat-text entry stays on screen. */
 const FCT_LIFE = 1.1;
 
-export function render(ctx: CanvasRenderingContext2D, state: GameState): void {
+export function render(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point | null = null,
+): void {
   ctx.clearRect(0, 0, CANVAS.w, CANVAS.h);
 
   drawGrid(ctx, state);
@@ -61,6 +65,9 @@ export function render(ctx: CanvasRenderingContext2D, state: GameState): void {
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
 
+  // A spell tooltip floats on top of the board while hovering a spell button.
+  if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, mouse);
+
   if (state.phase !== "playing") drawOverlay(ctx, state);
 }
 
@@ -70,10 +77,12 @@ function tracePath(ctx: CanvasRenderingContext2D, pts: Point[]): void {
   ctx.closePath();
 }
 
+/** Draw a tile under each entity only — no empty filler hexes. With the tiles
+ * sized large (see HEX_SIZE), the five occupied hexes fill the battle area. */
 function drawGrid(ctx: CanvasRenderingContext2D, state: GameState): void {
-  ctx.lineWidth = 1;
-  for (const hex of hexesInDisk(state.mapRadius)) {
-    const corners = hexCorners(hexCenter(hex), HEX_SIZE);
+  ctx.lineWidth = 1.5;
+  for (const e of state.entities) {
+    const corners = hexCorners(entityCenter(e), HEX_SIZE);
     tracePath(ctx, corners);
     ctx.fillStyle = COLORS.gridFill;
     ctx.fill();
@@ -198,9 +207,8 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
   }
 }
 
-/** Fixed unit panels on the left: HP, mana, cast + queued order. Clickable
- * exactly like the unit's token, so heal targeting never requires hunting for a
- * token. */
+/** Fixed unit panels on the left: HP, mana, cast. Clickable exactly like the
+ * unit's token, so heal targeting never requires hunting for a token. */
 function drawPartyFrames(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -257,7 +265,7 @@ function drawPartyFrames(
       bar(ctx, { ...mana, w: mana.w * (e.mana / e.maxMana) }, COLORS.mana);
     }
 
-    // Cast progress + current/queued order.
+    // Cast progress + current order.
     if (e.alive) {
       const cast: Rect = { x: hp.x, y: r.y + 40, w: hp.w, h: 5 };
       bar(ctx, cast, "#1c2029");
@@ -267,11 +275,10 @@ function drawPartyFrames(
         bar(ctx, { ...cast, w: cast.w * pctCast }, COLORS.cast);
         label = e.current.def.name;
       }
-      if (e.queued) label += ` ▸ ${e.queued.def.name}`;
       ctx.font = "9px system-ui, sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillStyle = e.queued ? COLORS.mana : COLORS.subtext;
+      ctx.fillStyle = COLORS.subtext;
       ctx.fillText(label, cast.x, cast.y + 7, hp.w);
     }
   });
@@ -372,8 +379,7 @@ function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
     isRoar || isLine ? "bold 9px system-ui, sans-serif" : "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  let label = isRoar ? `${e.current.def.name}!` : e.current.def.name;
-  if (e.queued) label += ` ▸ ${e.queued.def.name}`;
+  const label = isRoar ? `${e.current.def.name}!` : e.current.def.name;
   ctx.fillText(label, r.x + r.w / 2, r.y + r.h + 2);
 }
 
@@ -418,10 +424,6 @@ function drawFloatingText(
       ctx.fillStyle = COLORS.hot;
       ctx.font = "bold 13px system-ui, sans-serif";
       ctx.fillText(`+${Math.round(ev.amount)}`, x, y);
-    } else if (ev.kind === "queue-dropped") {
-      ctx.fillStyle = COLORS.line;
-      ctx.font = "bold 12px system-ui, sans-serif";
-      ctx.fillText("ORDER LOST", x, y);
     }
     ctx.globalAlpha = 1;
   }
@@ -478,7 +480,6 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
     const cdFrac = total > 0 ? Math.max(0, Math.min(1, remain / total)) : 0;
     button(ctx, b.rect, b.def.name, buttonSub(b.def), armed, hotkey, {
       disabled: !canUse(state, b.def),
-      queued: h?.queued?.def.id === b.def.id,
       cdFrac,
       cdRemain: remain,
     });
@@ -490,12 +491,80 @@ function HEALER_SPELL(id: string): ActionDef | undefined {
   return actionButtons().find((b) => b.def.id === id)?.def;
 }
 
+/** Total HP a heal spell restores: flat for direct/AoE heals, summed over the
+ * duration for a heal-over-time. */
+function healAmount(def: ActionDef): number {
+  const e = def.effect;
+  if (e.kind === "heal" || e.kind === "aoe-heal") return e.amount;
+  if (e.kind === "hot") return Math.round(e.perTick * (e.duration / e.interval));
+  return 0;
+}
+
+/** Button subtitle: how much it heals (+ "all" for the group heal) and its mana
+ * cost. Cast time and cooldown live in the hover tooltip, not on the face. */
 function buttonSub(def: ActionDef): string {
-  const parts = [`${def.castTime.toFixed(1)}s`];
+  let heal = `+${healAmount(def)}`;
+  if (def.effect.kind === "aoe-heal") heal += " all";
+  const parts = [heal];
   if (def.manaCost !== undefined) parts.push(`${def.manaCost} mp`);
-  if (def.cooldown) parts.push(`${def.cooldown.toFixed(1)}s cd`);
-  if (def.effect.kind === "aoe-heal") parts.push("all");
   return parts.join(" · ");
+}
+
+/** Hover tooltip for a spell button: its full stat block — heal, cast time,
+ * cooldown, and mana — floated above the button so the board stays readable. */
+function drawSpellTooltip(ctx: CanvasRenderingContext2D, mouse: Point): void {
+  const hovered = actionButtons().find((b) => pointInRect(mouse, b.rect));
+  if (!hovered) return;
+  const def = hovered.def;
+  const e = def.effect;
+
+  const heal = healAmount(def);
+  const healText =
+    e.kind === "aoe-heal"
+      ? `${heal} to all`
+      : e.kind === "hot"
+        ? `${heal} over ${e.duration.toFixed(0)}s`
+        : `${heal}`;
+  const rows: Array<[string, string]> = [
+    ["Heals", healText],
+    ["Cast time", `${def.castTime.toFixed(1)}s`],
+    ["Cooldown", def.cooldown ? `${def.cooldown.toFixed(1)}s` : "none"],
+    ["Mana", def.manaCost !== undefined ? `${def.manaCost}` : "free"],
+  ];
+
+  const pad = 10;
+  const titleH = 18;
+  const rowH = 15;
+  const w = 168;
+  const h = pad * 2 + titleH + rows.length * rowH;
+  const x = Math.max(
+    6,
+    Math.min(CANVAS.w - 6 - w, hovered.rect.x + hovered.rect.w / 2 - w / 2),
+  );
+  const y = hovered.rect.y - 10 - h; // float above the button
+
+  ctx.fillStyle = "rgba(12, 15, 21, 0.97)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = COLORS.armed;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(def.name, x + pad, y + pad);
+
+  ctx.font = "11px system-ui, sans-serif";
+  rows.forEach(([label, value], i) => {
+    const ry = y + pad + titleH + i * rowH;
+    ctx.fillStyle = COLORS.subtext;
+    ctx.textAlign = "left";
+    ctx.fillText(label, x + pad, ry);
+    ctx.fillStyle = COLORS.text;
+    ctx.textAlign = "right";
+    ctx.fillText(value, x + w - pad, ry);
+  });
 }
 
 function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
@@ -533,7 +602,6 @@ function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState): void {
       "Healing done",
       `${Math.round(s.healingDone)} (${Math.round(s.overhealing)} overheal)`,
     ],
-    ["Orders lost", `${s.ordersDropped}`],
     ["Deaths", `${s.deaths}`],
   ];
 
@@ -578,7 +646,6 @@ function ring(
 
 interface ButtonState {
   disabled?: boolean;
-  queued?: boolean;
   cdFrac?: number; // 0..1 fraction of cooldown remaining
   cdRemain?: number; // seconds of cooldown remaining
 }
@@ -592,20 +659,12 @@ function button(
   hotkey: string | undefined,
   st: ButtonState,
 ): void {
-  const { disabled, queued, cdFrac = 0, cdRemain = 0 } = st;
+  const { disabled, cdFrac = 0, cdRemain = 0 } = st;
   ctx.fillStyle = disabled ? "#13161c" : armed ? "#2a2f1a" : "#1b2029";
   ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = armed ? COLORS.armed : queued ? COLORS.mana : "#333a47";
-  ctx.lineWidth = armed || queued ? 2 : 1;
+  ctx.strokeStyle = armed ? COLORS.armed : "#333a47";
+  ctx.lineWidth = armed ? 2 : 1;
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-
-  if (queued) {
-    ctx.fillStyle = COLORS.mana;
-    ctx.font = "bold 9px system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "top";
-    ctx.fillText("QUEUED", r.x + r.w - 6, r.y + 5);
-  }
 
   ctx.fillStyle = disabled ? "#5a6170" : COLORS.text;
   ctx.font = "bold 15px system-ui, sans-serif";

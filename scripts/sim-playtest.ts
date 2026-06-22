@@ -24,10 +24,10 @@ function ready(h: Entity, def: ActionDef): boolean {
   return (h.cooldowns[def.id] ?? 0) <= 0 && h.mana >= (def.manaCost ?? 0);
 }
 
-/** The triage decision shared by the smart and queue bots: what to cast on whom
- * given current readiness. Models a mana-conscious player — it leans on the
- * efficient heals (Renew/Slow/Group) and spends the inefficient Fast Heal only
- * on true emergencies or when mana is comfortable. Returns undefined to bank. */
+/** The smart bot's triage decision: what to cast on whom given current
+ * readiness. Models a mana-conscious player — it leans on the efficient heals
+ * (Renew/Slow/Group) and spends the inefficient Fast Heal only on true
+ * emergencies or when mana is comfortable. Returns undefined to bank. */
 function triage(
   state: GameState,
   h: Entity,
@@ -71,23 +71,6 @@ const smartBot: Bot = (state) => {
   if (!h || !h.alive || h.current) return;
   const order = triage(state, h);
   if (order) issueOrder(state, h.id, order.def, order.targetId);
-};
-
-/** Queue-using player: same triage, but banks the next order while casting
- * (mana/cooldown may clear by promotion). Measures the 1-slot queue's slack. */
-const queueBot: Bot = (state) => {
-  const h = healer(state);
-  if (!h || !h.alive) return;
-  if (!h.current) {
-    const order = triage(state, h);
-    if (order) issueOrder(state, h.id, order.def, order.targetId);
-  } else if (!h.queued) {
-    // Bank a big efficient heal on the most-wounded for when this cast ends.
-    const hurt = livingParty(state)
-      .map((p) => ({ p, missing: p.maxHp - p.hp }))
-      .sort((a, b) => b.missing - a.missing)[0];
-    if (hurt && hurt.missing >= 45) issueOrder(state, h.id, SLOW_HEAL, hurt.p.id);
-  }
 };
 
 /** Sloppy player: spams Fast Heal on the most-hurt. Inefficient -> should run
@@ -170,7 +153,6 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
   let line = 0;
   let aoe = 0;
   let claw = 0;
-  let drops = 0;
   let starvSum = 0;
   let starvN = 0;
   let enrageSum = 0;
@@ -186,7 +168,6 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
     line += r.healerLine;
     aoe += r.healerAoe;
     claw += r.healerClaw;
-    drops += r.state.stats.ordersDropped;
     if (r.starvation !== null) {
       starvSum += r.starvation;
       starvN++;
@@ -203,8 +184,7 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
     `${name.padEnd(26)} win ${((wins / runs) * 100).toFixed(0).padStart(3)}%  ` +
       `kill ${String(avgTime).padStart(5)}s  deaths ${(totalDeaths / runs).toFixed(2)}  ` +
       `OOM@${String(avgStarv).padStart(3)}s enrage@${String(avgEnrage).padStart(3)}s  ` +
-      `healer L/A/C ${(line / runs).toFixed(0)}/${(aoe / runs).toFixed(0)}/${(claw / runs).toFixed(0)}  ` +
-      `drops ${(drops / runs).toFixed(1)}` +
+      `healer L/A/C ${(line / runs).toFixed(0)}/${(aoe / runs).toFixed(0)}/${(claw / runs).toFixed(0)}` +
       (timeouts ? `  TIMEOUTS ${timeouts}` : ""),
   );
 }
@@ -256,7 +236,5 @@ if (process.argv[2] === "debug") {
 summarize("smart, 0.3s", smartBot, 0.3);
 summarize("smart, 1.0s", smartBot, 1.0);
 summarize("smart, 2.0s", smartBot, 2.0);
-summarize("queue, 1.0s", queueBot, 1.0);
-summarize("queue, 2.0s", queueBot, 2.0);
 summarize("sloppy, 0.4s", sloppyBot, 0.4);
 summarize("afk", afkBot, 1.0);
