@@ -306,9 +306,10 @@ function clawTargetId(state: GameState): string | undefined {
   )?.id;
 }
 
-/** Curse victim: a random living NON-tank if any (the DoT spreads to the squishy
- * backline / the healer), otherwise the tank. */
-function curseTargetId(state: GameState): string | undefined {
+/** Backline victim: a random living NON-tank if any (the squishy ranger/mage/
+ * healer), otherwise the tank. Drives the off-tank attacks — the enemy Snipe and
+ * the Curse DoT — so the healer can't park every heal on the tank. */
+function backlineTargetId(state: GameState): string | undefined {
   const party = livingParty(state);
   const back = party.filter((p) => p.kind !== "tank");
   const pool = back.length > 0 ? back : party;
@@ -349,10 +350,15 @@ function startEnemyAction(state: GameState, e: Entity): void {
       startAction(state, e.id, def, undefined, pickLineVictims(state, def.effect.count));
       break;
     case "dot":
-      startAction(state, e.id, def, curseTargetId(state));
+      startAction(state, e.id, def, backlineTargetId(state));
       break;
-    default: // single-target damage (Claw / Heavy Smash)
-      startAction(state, e.id, def, clawTargetId(state));
+    default: // single-target damage: Claw/Heavy Smash hit the tank, Snipe the backline
+      startAction(
+        state,
+        e.id,
+        def,
+        def.targeting === "ally-backline" ? backlineTargetId(state) : clawTargetId(state),
+      );
   }
 }
 
@@ -427,10 +433,15 @@ function resolveAction(state: GameState, caster: Entity): void {
     case "damage": {
       let target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
       if (!target || !target.alive) {
-        target =
-          caster.kind === "enemy"
-            ? frontmostLiving(state)
-            : focusedEnemy(state) ?? frontmostEnemy(state);
+        if (caster.kind === "enemy") {
+          // A backline Snipe re-rolls onto another backliner; everything else
+          // (Claw / Heavy Smash) falls back to the tank-first priority target.
+          const retargetId =
+            def.targeting === "ally-backline" ? backlineTargetId(state) : undefined;
+          target = retargetId ? findEntity(state, retargetId) : frontmostLiving(state);
+        } else {
+          target = focusedEnemy(state) ?? frontmostEnemy(state);
+        }
       }
       if (target && target.alive) {
         const dealt = applyDamage(state, target, def.effect.amount);

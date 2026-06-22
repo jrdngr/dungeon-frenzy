@@ -132,6 +132,8 @@ function makeEnemyAttack(
   switch (key) {
     case "claw":
       return { id, name: "Claw", castTime, targeting: "ally-single", effect: { kind: "damage", amount: params.damage * dmgScale } };
+    case "shot":
+      return { id, name: "Snipe", castTime, targeting: "ally-backline", effect: { kind: "damage", amount: params.damage * dmgScale } };
     case "smash":
       return { id, name: "Heavy Smash", castTime, targeting: "ally-single", effect: { kind: "damage", amount: params.damage * dmgScale } };
     case "line":
@@ -141,7 +143,7 @@ function makeEnemyAttack(
     case "aoe":
       return { id, name: "Roar", castTime, targeting: "party-all", effect: { kind: "aoe-damage", amount: params.damage * dmgScale } };
     case "curse":
-      return { id, name: "Curse", castTime, targeting: "ally-single", effect: { kind: "dot", perTick: params.perTick * dmgScale, interval: params.interval, duration: params.duration } };
+      return { id, name: "Curse", castTime, targeting: "ally-backline", effect: { kind: "dot", perTick: params.perTick * dmgScale, interval: params.interval, duration: params.duration } };
     default:
       throw new Error(`unknown enemy attack "${key}"`);
   }

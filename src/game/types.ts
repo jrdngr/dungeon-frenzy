@@ -17,7 +17,8 @@ export interface Hex {
 /** What an action is allowed to target. */
 export type Targeting =
   | "enemy" // the party's focused enemy (party auto-attacks)
-  | "ally-single" // one chosen living party member (single-target heals; enemy claw/smash/curse)
+  | "ally-single" // one chosen living party member (single-target heals; enemy Claw/Heavy Smash on the tank)
+  | "ally-backline" // a random non-tank ally (enemy Snipe / Curse — pressure off the tank)
   | "ally-dead" // one chosen DEAD party member (Resurrect)
   | "party-all" // all living party members (AoE heal / enemy AoE)
   | "line"; // enemy linear hit: a primary target plus N-1 random others

@@ -8,8 +8,9 @@
 // everyone restores a little and the dead revive at low HP. Everything is immobile.
 //
 // Targeting:
-// - Enemies pile single-target (Claw / Heavy Smash) on the TANK; Line/Cleave hit a
-//   primary + random others; AoE hits all; Curse is a hostile DoT on the backline.
+// - Enemies pile single-target (Claw / Heavy Smash) on the TANK; a rarer Snipe (and
+//   the Curse DoT) picks off a random BACKLINE member, pulling healing off the tank;
+//   Line/Cleave hit a primary + random others; AoE hits all.
 // - The party focus-fires ONE enemy (player picks it by clicking a front-row enemy);
 //   only the frontmost living row is targetable — back-row enemies (e.g. a shielded
 //   boss) can't be hit until the front row is cleared, though they still attack.
@@ -76,32 +77,38 @@ export const CONFIG = {
   // frenzy: damage *= damageScale, castTime *= castScale below hpFraction).
   // Attack keys & how they resolve (engine builds the ActionDefs from these):
   //   claw   single-target on the tank (tank-first priority)        [damage]
+  //   shot   single-target on a random backline member (Snipe)      [damage]
   //   line   primary + 1 random other (Cleave)                      [line, count 2]
   //   cleave primary + 2 random others (Wide Cleave)                [line, count 3]
   //   smash  big single hit on the tank (Heavy Smash; pre-heal it)  [damage]
   //   aoe    all living party (Roar)                                [aoe-damage]
   //   curse  hostile damage-over-time on a backline member          [dot]
   enemyTypes: {
-    // Small enemies — die fast; pressure comes from their numbers. They mirror the
-    // area boss's base attacks (claw, later light line). Never enrage. Trash is
-    // tuned to stay PASSABLE for a skilled player in every area (so each area's
-    // wall is its boss, not its packs); difficulty rises gently a1 -> a5, with the
-    // a4/a5 line cleaves reaching the backline.
+    // Small enemies — die fast; pressure comes from their numbers. They mostly claw
+    // the tank but, from area 1's SECOND fight on, mix in a rarer off-tank hit — a
+    // Snipe at a random backline member (a4/a5 use a light line instead) — so the
+    // healer can't park every heal on the tank. Never enrage. Trash stays PASSABLE
+    // for a skilled player in every area (each area's wall is its boss, not its
+    // packs); difficulty rises gently a1 -> a5. a1small is the pure tank-claw intro
+    // pack (area 1 fight 1 only); a1slinger is its snipe-capable cousin.
     a1small: { name: "Imp", maxHp: 90, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
-    a2small: { name: "Kobold", maxHp: 95, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
-    a3small: { name: "Gnoll", maxHp: 95, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
+    a1slinger: { name: "Imp Slinger", maxHp: 90, sp: 1, rotation: ["claw", "claw", "claw", "shot"], attacks: { claw: { castTime: 2.6, damage: 8 }, shot: { castTime: 2.8, damage: 6 } } },
+    a2small: { name: "Kobold", maxHp: 95, sp: 1, rotation: ["claw", "claw", "shot"], attacks: { claw: { castTime: 2.6, damage: 9 }, shot: { castTime: 2.8, damage: 7 } } },
+    a3small: { name: "Gnoll", maxHp: 95, sp: 1, rotation: ["claw", "claw", "shot"], attacks: { claw: { castTime: 2.5, damage: 9 }, shot: { castTime: 2.7, damage: 7 } } },
     a4small: { name: "Marauder", maxHp: 100, sp: 1, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
     a5small: { name: "Reaver", maxHp: 100, sp: 1, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
 
-    // Boss 1 — single-target claws on the tank only. The gentle introduction; a
-    // comfortable cap on area 1 that a skilled healer clears with mana to spare.
+    // Boss 1 — claws the tank, with an occasional Snipe at the backline (1 in 4).
+    // The gentle introduction; a comfortable cap on area 1 that a skilled healer
+    // clears with mana to spare, but the snipe means the tank isn't the only thing
+    // to watch.
     boss1: {
       name: "Ogre Brute",
       isBoss: true,
       maxHp: 480,
       sp: 4,
-      rotation: ["claw"],
-      attacks: { claw: { castTime: 2.6, damage: 15 } },
+      rotation: ["claw", "claw", "claw", "shot"],
+      attacks: { claw: { castTime: 2.6, damage: 15 }, shot: { castTime: 2.6, damage: 12 } },
     },
     // Boss 2 — claws + a Cleave (tank + one random other; first hits on the backline).
     // Area 2's capstone: a clear step up from area 1 but still beatable by a
@@ -172,8 +179,10 @@ export const CONFIG = {
     {
       name: "Whispering Glade",
       fights: [
+        // Fight 1 stays a pure tank-claw intro (a1small); fight 2 on, the Slingers
+        // add a rare backline Snipe so the healer starts splitting attention.
         { enemies: [r("a1small", 0, 0), r("a1small", 0, 1)] },
-        { enemies: [r("a1small", 0, 0), r("a1small", 0, 1), r("a1small", 1, 0), r("a1small", 1, 1)] },
+        { enemies: [r("a1slinger", 0, 0), r("a1slinger", 0, 1), r("a1slinger", 1, 0), r("a1slinger", 1, 1)] },
         { enemies: [r("boss1", 0, 0)] },
       ],
     },

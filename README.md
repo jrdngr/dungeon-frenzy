@@ -39,8 +39,9 @@ to retry; cleared progress is in-memory only.
   targetable — back-row enemies (e.g. a shielded boss) can't be hit until the
   front row is cleared, but they keep attacking.
 - **Enemy attacks** escalate across areas: single-target Claw/Heavy Smash pile on
-  the tank; Cleave/Wide Cleave hit a primary plus random others; Roar hits the
-  whole party; Curse is a hostile damage-over-time on the backline. Late bosses
+  the tank, but from area 1's second fight on a rarer Snipe (and Curse) picks off a
+  random backline member so you can't park every heal on the tank; Cleave/Wide
+  Cleave hit a primary plus random others; Roar hits the whole party. Late bosses
   **enrage** below 15% HP.
 
 ## Progression: the skill tree
