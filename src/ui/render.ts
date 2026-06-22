@@ -1,15 +1,22 @@
 // All canvas drawing. Reads GameState; never mutates it.
 
 import { hexCorners, type Point } from "../game/hex";
-import { enemy as findEnemy, findEntity } from "../game/combat";
+import {
+  findEntity,
+  focusedEnemy,
+  frontRowEnemies,
+} from "../game/combat";
+import { enemyType, isBossType } from "../game/actions";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
-import { ABILITY_KEYS, canUse, partySlots } from "./input";
+import { ABILITY_KEYS, areaUnlocked, canUse, partySlots } from "./input";
 import {
   actionButtons,
+  areaCardRect,
   CANVAS,
   entityCenter,
+  entityRadius,
   HEX_SIZE,
   hpBarRect,
   manaBarRect,
@@ -17,16 +24,16 @@ import {
   partyFrameRect,
   pointInRect,
   progressBarRect,
-  TOKEN_RADIUS,
   type Rect,
 } from "./layout";
 
 const COLORS = {
-  tank: "#5b8dd6", // steel blue
-  ranger: "#6cc06c", // green
-  mage: "#a87fe0", // violet
-  healer: "#5bc98a", // teal-green (you)
+  tank: "#5b8dd6",
+  ranger: "#6cc06c",
+  mage: "#a87fe0",
+  healer: "#5bc98a",
   enemy: "#c9595b",
+  boss: "#d4504f",
   dead: "#3a3f4a",
   hpFull: "#5bc98a",
   hpMid: "#d7c08a",
@@ -34,15 +41,21 @@ const COLORS = {
   enemyHp: "#c9595b",
   cast: "#8a9bd7",
   enemyCast: "#d79a8a",
-  line: "#e8a13a", // line-attack telegraph / pip
+  line: "#e8a13a",
+  curse: "#b06cd9",
+  smash: "#ff5a4d",
   hot: "#5bc98a",
   mana: "#5aa9e8",
   threat: "#e05a5c",
   armed: "#d7c08a",
   target: "#d7c08a",
+  focus: "#f2e85c",
+  targetable: "#7d7a52",
   cooldown: "rgba(9, 11, 16, 0.6)",
   text: "#e6e8ee",
   subtext: "#aab2c5",
+  locked: "#5a6170",
+  cleared: "#5bc98a",
   grid: "#222733",
   gridFill: "#11141b",
 };
@@ -57,6 +70,11 @@ export function render(
 ): void {
   ctx.clearRect(0, 0, CANVAS.w, CANVAS.h);
 
+  if (state.phase === "area-select") {
+    drawHub(ctx, state, mouse);
+    return;
+  }
+
   drawGrid(ctx, state);
   drawTelegraphs(ctx, state);
   drawEntities(ctx, state);
@@ -65,9 +83,7 @@ export function render(
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
 
-  // A spell tooltip floats on top of the board while hovering a spell button.
   if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, mouse);
-
   if (state.phase !== "playing") drawOverlay(ctx, state);
 }
 
@@ -77,13 +93,14 @@ function tracePath(ctx: CanvasRenderingContext2D, pts: Point[]): void {
   ctx.closePath();
 }
 
-/** Draw a tile under each entity only — no empty filler hexes. With the tiles
- * sized large (see HEX_SIZE), the five occupied hexes fill the battle area. */
+/** A tile under each entity — large hexes for the party column, small ones under
+ * each enemy token. */
 function drawGrid(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.lineWidth = 1.5;
   for (const e of state.entities) {
-    const corners = hexCorners(entityCenter(e), HEX_SIZE);
-    tracePath(ctx, corners);
+    const c = entityCenter(state, e);
+    const size = e.kind === "enemy" ? entityRadius(e) + 7 : HEX_SIZE;
+    tracePath(ctx, hexCorners(c, size));
     ctx.fillStyle = COLORS.gridFill;
     ctx.fill();
     ctx.strokeStyle = COLORS.grid;
@@ -91,74 +108,105 @@ function drawGrid(ctx: CanvasRenderingContext2D, state: GameState): void {
   }
 }
 
-/** A dashed threat line from the enemy to a victim, with a ring on the victim.
- * Brightens as the cast nears completion. */
 function threatLine(
   ctx: CanvasRenderingContext2D,
   from: Point,
   to: Point,
   progress: number,
+  color: string,
+  radius: number,
+  width = 2,
 ): void {
   ctx.save();
   ctx.globalAlpha = 0.3 + 0.6 * progress;
-  ctx.strokeStyle = COLORS.threat;
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
   ctx.setLineDash([7, 5]);
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
   ctx.lineTo(to.x, to.y);
   ctx.stroke();
   ctx.setLineDash([]);
-  ring(ctx, to.x, to.y, TOKEN_RADIUS + 8, COLORS.threat, 2);
+  ring(ctx, to.x, to.y, radius + 8, color, width);
   ctx.restore();
 }
 
-/** Show what's winding up: a line to the Claw victim, two lines for a Cleave
- * (the tank + one other — this is how the healer gets hit), and warning rings
- * on everyone while a Roar (AoE) is incoming. */
+/** Show every living enemy's wind-up: a line to a Claw victim (thicker/red for a
+ * Heavy Smash), purple lines for a Curse, two/three lines for a Cleave, and
+ * warning rings on the party for a Roar (AoE). */
 function drawTelegraphs(ctx: CanvasRenderingContext2D, state: GameState): void {
-  const en = findEnemy(state);
-  if (!en || !en.alive || !en.current) return;
-  const inst = en.current;
-  const progress = Math.min(1, inst.elapsed / inst.def.castTime);
-  const c = entityCenter(en);
-  const kind = inst.def.effect.kind;
+  for (const en of state.entities) {
+    if (en.kind !== "enemy" || !en.alive || !en.current) continue;
+    const inst = en.current;
+    const progress = Math.min(1, inst.elapsed / inst.def.castTime);
+    const c = entityCenter(state, en);
+    const kind = inst.def.effect.kind;
 
-  if (kind === "damage" && inst.targetId) {
-    const t = findEntity(state, inst.targetId);
-    if (t && t.alive) threatLine(ctx, c, entityCenter(t), progress);
-  } else if (kind === "line-damage") {
-    for (const id of [inst.targetId, inst.secondaryTargetId]) {
-      if (!id) continue;
-      const t = findEntity(state, id);
-      if (t && t.alive) threatLine(ctx, c, entityCenter(t), progress);
+    if (kind === "damage") {
+      const t = inst.targetId ? findEntity(state, inst.targetId) : undefined;
+      if (t && t.alive) {
+        const smash = inst.def.name === "Heavy Smash";
+        threatLine(
+          ctx,
+          c,
+          entityCenter(state, t),
+          progress,
+          smash ? COLORS.smash : COLORS.threat,
+          entityRadius(t),
+          smash ? 4 : 2,
+        );
+      }
+    } else if (kind === "dot") {
+      const t = inst.targetId ? findEntity(state, inst.targetId) : undefined;
+      if (t && t.alive) {
+        threatLine(ctx, c, entityCenter(state, t), progress, COLORS.curse, entityRadius(t));
+      }
+    } else if (kind === "line-damage") {
+      for (const id of inst.victimIds ?? []) {
+        const t = findEntity(state, id);
+        if (t && t.alive) {
+          threatLine(ctx, c, entityCenter(state, t), progress, COLORS.line, entityRadius(t));
+        }
+      }
+    } else if (kind === "aoe-damage") {
+      const pulse = 1 + Math.sin(state.elapsedTime * 8) * 0.5;
+      ctx.save();
+      ctx.globalAlpha = (0.3 + 0.5 * progress) * (0.6 + 0.4 * pulse);
+      ctx.setLineDash([5, 4]);
+      for (const p of state.entities) {
+        if (!isParty(p) || !p.alive) continue;
+        const pc = entityCenter(state, p);
+        ring(ctx, pc.x, pc.y, entityRadius(p) + 11, COLORS.threat, 3);
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
     }
-  } else if (kind === "aoe-damage") {
-    const pulse = 1 + Math.sin(state.elapsedTime * 8) * 0.5;
-    ctx.save();
-    ctx.globalAlpha = (0.3 + 0.5 * progress) * (0.6 + 0.4 * pulse);
-    ctx.setLineDash([5, 4]);
-    for (const p of state.entities) {
-      if (!isParty(p) || !p.alive) continue;
-      const pc = entityCenter(p);
-      ring(ctx, pc.x, pc.y, TOKEN_RADIUS + 11, COLORS.threat, 3);
-    }
-    ctx.setLineDash([]);
-    ctx.restore();
   }
 }
 
 function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
   const armed = !!state.armedSpellId;
-  const slots = partySlots(state); // slot index -> hotkey (1-based)
+  const slots = partySlots(state);
+  const front = new Set(frontRowEnemies(state).map((e) => e.id));
+  const focus = focusedEnemy(state);
 
   for (const e of state.entities) {
-    const c = entityCenter(e);
+    const c = entityCenter(state, e);
+    const radius = entityRadius(e);
     const slot = slots.indexOf(e);
+    const backRow = e.kind === "enemy" && e.alive && !front.has(e.id);
 
-    // With a spell armed, every living ally is a legal click target.
+    ctx.save();
+    if (!e.alive) ctx.globalAlpha = 0.32; // corpse
+    else if (backRow) ctx.globalAlpha = 0.55; // shielded back row
+
+    // Target/focus affordances.
     if (armed && isParty(e) && e.alive) {
-      ring(ctx, c.x, c.y, TOKEN_RADIUS + 5, COLORS.target, 2);
+      ring(ctx, c.x, c.y, radius + 5, COLORS.target, 2);
+    }
+    if (e.kind === "enemy" && e.alive) {
+      if (focus && focus.id === e.id) ring(ctx, c.x, c.y, radius + 5, COLORS.focus, 3);
+      else if (front.has(e.id)) ring(ctx, c.x, c.y, radius + 5, COLORS.targetable, 1.5);
     }
 
     // Enraged enemy seethes.
@@ -166,14 +214,14 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
       const pulse = 0.6 + 0.4 * Math.sin(state.elapsedTime * 6);
       ctx.save();
       ctx.globalAlpha = pulse;
-      ring(ctx, c.x, c.y, TOKEN_RADIUS + 5, COLORS.threat, 4);
+      ring(ctx, c.x, c.y, radius + 5, COLORS.threat, 4);
       ctx.restore();
     }
 
     // Token.
     ctx.beginPath();
-    ctx.arc(c.x, c.y, TOKEN_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = e.alive ? COLORS[e.kind] : COLORS.dead;
+    ctx.arc(c.x, c.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = e.alive ? tokenColor(e) : COLORS.dead;
     ctx.fill();
 
     // Label inside token.
@@ -183,36 +231,38 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
     ctx.textBaseline = "middle";
     ctx.fillText(shortName(e), c.x, c.y);
 
-    // Target-hotkey badge for party members (1-based slot number).
+    // Target-hotkey badge for party members.
     if (slot >= 0 && e.alive) {
       ctx.fillStyle = COLORS.armed;
       ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(slot + 1), c.x - TOKEN_RADIUS + 1, c.y - TOKEN_RADIUS + 1);
+      ctx.fillText(String(slot + 1), c.x - radius + 1, c.y - radius + 1);
     }
 
-    drawHpBar(ctx, e);
-    if (e.maxMana > 0 && e.alive) drawManaBar(ctx, e);
-    if (e.kind === "enemy" && e.alive) drawRotationIndicator(ctx, e);
-    drawProgressBar(ctx, e);
-
-    if (!e.alive) {
+    if (e.alive) {
+      drawHpBar(ctx, state, e);
+      if (e.maxMana > 0) drawManaBar(ctx, state, e);
+      if (e.kind === "enemy" && isBossType(e.enemyType)) drawRotationIndicator(ctx, state, e);
+      drawProgressBar(ctx, state, e);
+      drawCurseMark(ctx, state, e);
+    } else if (isParty(e)) {
       ctx.fillStyle = COLORS.hpLow;
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText("DEAD", c.x, c.y + TOKEN_RADIUS + 6);
+      ctx.fillText("DEAD", c.x, c.y + radius + 6);
     }
+
+    ctx.restore();
   }
 }
 
-/** Fixed unit panels on the left: HP, mana, cast. Clickable exactly like the
- * unit's token, so heal targeting never requires hunting for a token. */
-function drawPartyFrames(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
+function tokenColor(e: Entity): string {
+  if (e.kind === "enemy") return isBossType(e.enemyType) ? COLORS.boss : COLORS.enemy;
+  return COLORS[e.kind];
+}
+
+/** Fixed unit panels on the left: HP, mana, cast. */
+function drawPartyFrames(ctx: CanvasRenderingContext2D, state: GameState): void {
   const armed = !!state.armedSpellId;
   const slots = partySlots(state);
 
@@ -222,7 +272,6 @@ function drawPartyFrames(
     ctx.fillStyle = "#10131a";
     ctx.fillRect(r.x, r.y, r.w, r.h);
 
-    // Border: a legal heal target (spell armed) lights up; otherwise calm.
     let border = "#333a47";
     let lw = 1;
     if (armed && e.alive) {
@@ -233,7 +282,6 @@ function drawPartyFrames(
     ctx.lineWidth = lw;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
 
-    // Header: hotkey + name (+ DEAD tag).
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
@@ -245,9 +293,12 @@ function drawPartyFrames(
       ctx.fillStyle = COLORS.hpLow;
       ctx.textAlign = "right";
       ctx.fillText("DEAD", r.x + r.w - 6, r.y + 5);
+    } else if (e.hots.some((h) => h.hostile)) {
+      ctx.fillStyle = COLORS.curse;
+      ctx.textAlign = "right";
+      ctx.fillText("CURSED", r.x + r.w - 6, r.y + 5);
     }
 
-    // HP bar.
     const hp: Rect = { x: r.x + 6, y: r.y + 20, w: r.w - 12, h: 10 };
     bar(ctx, hp, "#1c2029");
     const pct = e.maxHp > 0 ? e.hp / e.maxHp : 0;
@@ -258,14 +309,12 @@ function drawPartyFrames(
     ctx.fillStyle = COLORS.text;
     ctx.fillText(`${Math.ceil(e.hp)}/${e.maxHp}`, hp.x + hp.w / 2, hp.y + hp.h / 2 + 1);
 
-    // Mana strip (healer only).
     if (e.maxMana > 0 && e.alive) {
       const mana: Rect = { x: hp.x, y: hp.y + hp.h + 2, w: hp.w, h: 4 };
       bar(ctx, mana, "#1c2029");
       bar(ctx, { ...mana, w: mana.w * (e.mana / e.maxMana) }, COLORS.mana);
     }
 
-    // Cast progress + current order.
     if (e.alive) {
       const cast: Rect = { x: hp.x, y: r.y + 40, w: hp.w, h: 5 };
       bar(ctx, cast, "#1c2029");
@@ -291,12 +340,11 @@ function hpColor(e: Entity, pct: number): string {
   return COLORS.hpLow;
 }
 
-function drawHpBar(ctx: CanvasRenderingContext2D, e: Entity): void {
-  const r = hpBarRect(e);
+function drawHpBar(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  const r = hpBarRect(state, e);
   const pct = e.maxHp > 0 ? e.hp / e.maxHp : 0;
   bar(ctx, r, "#1c2029");
   bar(ctx, { ...r, w: r.w * pct }, hpColor(e, pct));
-  // HP number, centered. Shadow keeps it readable on fill and empty track.
   ctx.font = "bold 9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -305,8 +353,7 @@ function drawHpBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   ctx.fillStyle = COLORS.text;
   ctx.fillText(`${Math.ceil(e.hp)}/${e.maxHp}`, r.x + r.w / 2, r.y + r.h / 2 + 1);
 
-  // HoT indicator.
-  if (e.alive && e.hots.length > 0) {
+  if (e.alive && e.hots.some((h) => !h.hostile)) {
     ctx.fillStyle = COLORS.hot;
     ctx.font = "bold 10px system-ui, sans-serif";
     ctx.textAlign = "left";
@@ -314,28 +361,35 @@ function drawHpBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   }
 }
 
-function drawManaBar(ctx: CanvasRenderingContext2D, e: Entity): void {
-  const r = manaBarRect(e);
+function drawManaBar(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  const r = manaBarRect(state, e);
   bar(ctx, r, "#1c2029");
-  const pct = e.mana / e.maxMana;
-  bar(ctx, { ...r, w: r.w * pct }, COLORS.mana);
+  bar(ctx, { ...r, w: r.w * (e.mana / e.maxMana) }, COLORS.mana);
 }
 
-/** Pips above the enemy's HP bar showing its attack rotation, coloured by type
- * (salmon Claw, orange Cleave, red Roar). The current/casting slot is enlarged
- * and ringed so the player can read what's coming. */
-function drawRotationIndicator(ctx: CanvasRenderingContext2D, e: Entity): void {
-  const rotation = CONFIG.enemy.rotation;
+/** A small skull-ish mark over a cursed party member (hostile DoT riding them). */
+function drawCurseMark(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  if (!isParty(e) || !e.hots.some((h) => h.hostile)) return;
+  const r = hpBarRect(state, e);
+  ctx.fillStyle = COLORS.curse;
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText("☠", r.x - 3, r.y + r.h / 2);
+}
+
+/** Pips above a boss's HP bar showing its attack rotation. */
+function drawRotationIndicator(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  const rotation = enemyType(e.enemyType!).rotation;
   const active = e.actionCount % rotation.length;
-  const hp = hpBarRect(e);
-  const gap = 13;
+  const hp = hpBarRect(state, e);
+  const gap = 12;
   const y = hp.y - 8;
   const cx = hp.x + hp.w / 2;
   const startX = cx - ((rotation.length - 1) * gap) / 2;
   rotation.forEach((slot, i) => {
     const x = startX + i * gap;
-    const color =
-      slot === "aoe" ? COLORS.threat : slot === "line" ? COLORS.line : COLORS.enemyCast;
+    const color = pipColor(slot);
     ctx.beginPath();
     ctx.arc(x, y, i === active ? 4.5 : 3, 0, Math.PI * 2);
     if (i === active) {
@@ -352,9 +406,24 @@ function drawRotationIndicator(ctx: CanvasRenderingContext2D, e: Entity): void {
   });
 }
 
-function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
-  if (!e.alive) return;
-  const r = progressBarRect(e);
+function pipColor(slot: string): string {
+  switch (slot) {
+    case "aoe":
+      return COLORS.threat;
+    case "line":
+    case "cleave":
+      return COLORS.line;
+    case "curse":
+      return COLORS.curse;
+    case "smash":
+      return COLORS.smash;
+    default:
+      return COLORS.enemyCast;
+  }
+}
+
+function drawProgressBar(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  const r = progressBarRect(state, e);
   if (!e.current) {
     if (isParty(e)) bar(ctx, r, "#1c2029");
     return;
@@ -362,58 +431,50 @@ function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   bar(ctx, r, "#1c2029");
   const pct = Math.min(1, e.current.elapsed / e.current.def.castTime);
   const kind = e.current.def.effect.kind;
-  const isRoar = kind === "aoe-damage";
-  const isLine = kind === "line-damage";
-  const color =
-    e.kind === "enemy"
-      ? isRoar
-        ? COLORS.threat
-        : isLine
-          ? COLORS.line
-          : COLORS.enemyCast
-      : COLORS.cast;
+  const name = e.current.def.name;
+  const big = kind === "aoe-damage" || name === "Heavy Smash";
+  let color = COLORS.cast;
+  if (e.kind === "enemy") {
+    if (kind === "aoe-damage") color = COLORS.threat;
+    else if (name === "Heavy Smash") color = COLORS.smash;
+    else if (kind === "line-damage") color = COLORS.line;
+    else if (kind === "dot") color = COLORS.curse;
+    else color = COLORS.enemyCast;
+  }
   bar(ctx, { ...r, w: r.w * pct }, color);
 
-  ctx.fillStyle = isRoar ? COLORS.threat : isLine ? COLORS.line : COLORS.subtext;
-  ctx.font =
-    isRoar || isLine ? "bold 9px system-ui, sans-serif" : "9px system-ui, sans-serif";
+  ctx.fillStyle = color === COLORS.cast ? COLORS.subtext : color;
+  ctx.font = big ? "bold 9px system-ui, sans-serif" : "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  const label = isRoar ? `${e.current.def.name}!` : e.current.def.name;
-  ctx.fillText(label, r.x + r.w / 2, r.y + r.h + 2);
+  ctx.fillText(big ? `${name}!` : name, r.x + r.w / 2, r.y + r.h + 2);
 }
 
-/** Floating combat text driven by sim events: damage, heals, enrage, lost orders. */
-function drawFloatingText(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
+function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
   for (const ev of state.events) {
     const age = state.elapsedTime - ev.at;
+    const e = findEntity(state, ev.entityId);
+    if (!e) continue;
+    const c = entityCenter(state, e);
+    const radius = entityRadius(e);
 
     if (ev.kind === "enrage") {
       if (age > 2.2) continue;
-      const e = findEntity(state, ev.entityId);
-      if (!e) continue;
-      const c = entityCenter(e);
       const t = age / 2.2;
       ctx.globalAlpha = 1 - t * t;
       ctx.fillStyle = COLORS.threat;
-      ctx.font = "bold 28px system-ui, sans-serif";
-      ctx.fillText("ENRAGED!", c.x, c.y - TOKEN_RADIUS - 38 - t * 24);
+      ctx.font = "bold 24px system-ui, sans-serif";
+      ctx.fillText("ENRAGED!", c.x, c.y - radius - 30 - t * 24);
       ctx.globalAlpha = 1;
       continue;
     }
 
     if (age > FCT_LIFE) continue;
-    const e = findEntity(state, ev.entityId);
-    if (!e) continue;
-    const c = entityCenter(e);
     const t = age / FCT_LIFE;
     const x = c.x + Math.sin(ev.at * 137.1) * 14;
-    const y = c.y - TOKEN_RADIUS - 22 - t * 28;
+    const y = c.y - radius - 18 - t * 28;
     ctx.globalAlpha = 1 - t * t;
 
     if (ev.kind === "damage") {
@@ -437,7 +498,6 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
 
   const h = state.entities.find((e) => e.kind === "healer");
 
-  // Header: healer mana (your whole economy) + a hint.
   if (h) {
     ctx.fillStyle = COLORS.text;
     ctx.font = "bold 13px system-ui, sans-serif";
@@ -446,20 +506,13 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
     ctx.fillText("Healer", PANEL.x + 14, PANEL.y + 10);
     ctx.fillStyle = COLORS.mana;
     ctx.font = "bold 12px system-ui, sans-serif";
-    ctx.fillText(
-      `Mana ${Math.floor(h.mana)}/${h.maxMana}`,
-      PANEL.x + 14,
-      PANEL.y + 28,
-    );
-    // A wide mana bar so the drain is impossible to miss.
+    ctx.fillText(`Mana ${Math.floor(h.mana)}/${h.maxMana}`, PANEL.x + 14, PANEL.y + 28);
     const mb: Rect = { x: PANEL.x + 14, y: PANEL.y + 44, w: 150, h: 6 };
     bar(ctx, mb, "#1c2029");
     bar(ctx, { ...mb, w: mb.w * (h.mana / h.maxMana) }, COLORS.mana);
   }
 
-  const armedDef = state.armedSpellId
-    ? HEALER_SPELL(state.armedSpellId)
-    : undefined;
+  const armedDef = state.armedSpellId ? HEALER_SPELL(state.armedSpellId) : undefined;
   ctx.fillStyle = armedDef ? COLORS.armed : COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "center";
@@ -467,7 +520,7 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.fillText(
     armedDef
       ? `${armedDef.name} armed — click an ally (or press 1-4) to cast`
-      : "Pick a spell (Q W E R or click), then click an ally to heal.",
+      : "Pick a spell (Q W E R or click), then click an ally to heal · click an enemy to focus-fire",
     PANEL.x + PANEL.w / 2,
     PANEL.y + 10,
   );
@@ -486,13 +539,10 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
   });
 }
 
-/** Look up a healer spell def by id (for the armed-spell label). */
 function HEALER_SPELL(id: string): ActionDef | undefined {
   return actionButtons().find((b) => b.def.id === id)?.def;
 }
 
-/** Total HP a heal spell restores: flat for direct/AoE heals, summed over the
- * duration for a heal-over-time. */
 function healAmount(def: ActionDef): number {
   const e = def.effect;
   if (e.kind === "heal" || e.kind === "aoe-heal") return e.amount;
@@ -500,8 +550,6 @@ function healAmount(def: ActionDef): number {
   return 0;
 }
 
-/** Button subtitle: how much it heals (+ "all" for the group heal) and its mana
- * cost. Cast time and cooldown live in the hover tooltip, not on the face. */
 function buttonSub(def: ActionDef): string {
   let heal = `+${healAmount(def)}`;
   if (def.effect.kind === "aoe-heal") heal += " all";
@@ -510,8 +558,6 @@ function buttonSub(def: ActionDef): string {
   return parts.join(" · ");
 }
 
-/** Hover tooltip for a spell button: its full stat block — heal, cast time,
- * cooldown, and mana — floated above the button so the board stays readable. */
 function drawSpellTooltip(ctx: CanvasRenderingContext2D, mouse: Point): void {
   const hovered = actionButtons().find((b) => pointInRect(mouse, b.rect));
   if (!hovered) return;
@@ -536,18 +582,15 @@ function drawSpellTooltip(ctx: CanvasRenderingContext2D, mouse: Point): void {
   const titleH = 18;
   const rowH = 15;
   const w = 168;
-  const h = pad * 2 + titleH + rows.length * rowH;
-  const x = Math.max(
-    6,
-    Math.min(CANVAS.w - 6 - w, hovered.rect.x + hovered.rect.w / 2 - w / 2),
-  );
-  const y = hovered.rect.y - 10 - h; // float above the button
+  const hgt = pad * 2 + titleH + rows.length * rowH;
+  const x = Math.max(6, Math.min(CANVAS.w - 6 - w, hovered.rect.x + hovered.rect.w / 2 - w / 2));
+  const y = hovered.rect.y - 10 - hgt;
 
   ctx.fillStyle = "rgba(12, 15, 21, 0.97)";
-  ctx.fillRect(x, y, w, h);
+  ctx.fillRect(x, y, w, hgt);
   ctx.strokeStyle = COLORS.armed;
   ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, hgt - 1);
 
   ctx.fillStyle = COLORS.text;
   ctx.font = "bold 13px system-ui, sans-serif";
@@ -568,58 +611,177 @@ function drawSpellTooltip(ctx: CanvasRenderingContext2D, mouse: Point): void {
 }
 
 function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const area = CONFIG.areas[state.areaIndex];
+  const fights = area.fights.length;
   ctx.fillStyle = COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`Time: ${state.elapsedTime.toFixed(1)}s`, 12, 12);
+  ctx.fillText(
+    `${area.name} — Fight ${state.fightIndex + 1}/${fights}  ·  ${state.elapsedTime.toFixed(1)}s`,
+    12,
+    12,
+  );
 
   ctx.textAlign = "right";
   ctx.fillText(
-    "Q W E R / click a spell · 1-4 / click an ally to cast · X stop · Esc clear · M mute",
+    "Q W E R / click spell · 1-4 / click ally to cast · click enemy to focus · X stop · Esc clear · M mute",
     CANVAS.w - 12,
     12,
   );
 }
 
+/** End-of-fight interstitial / area-cleared / defeat overlay. */
 function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.fillStyle = "rgba(8, 10, 14, 0.85)";
   ctx.fillRect(0, 0, CANVAS.w, PANEL.y);
 
   const cx = CANVAS.w / 2;
-  const s = state.stats;
+  const area = CONFIG.areas[state.areaIndex];
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  ctx.fillStyle = state.phase === "won" ? COLORS.hpFull : COLORS.hpLow;
-  ctx.font = "bold 48px system-ui, sans-serif";
-  ctx.fillText(state.phase === "won" ? "Victory!" : "Game Over", cx, 150);
+  let title: string;
+  let titleColor: string;
+  let footer: string;
+  if (state.phase === "fight-cleared") {
+    title = `Fight ${state.fightIndex + 1}/${area.fights.length} cleared`;
+    titleColor = COLORS.hpFull;
+    footer = "Party recovers (+10% HP/MP · fallen revived) — click or press a key to continue";
+  } else if (state.phase === "area-cleared") {
+    title = `${area.name} cleared!`;
+    titleColor = COLORS.hpFull;
+    footer = "Click (or press a key) to return to the map";
+  } else {
+    title = "Defeated";
+    titleColor = COLORS.hpLow;
+    footer = "Click (or press a key) to return to the map";
+  }
 
-  const lines: Array<[string, string]> = [
-    ["Time", `${state.elapsedTime.toFixed(1)}s`],
-    ["Damage dealt", `${Math.round(s.damageDealt)}`],
-    [
-      "Healing done",
-      `${Math.round(s.healingDone)} (${Math.round(s.overhealing)} overheal)`,
-    ],
-    ["Deaths", `${s.deaths}`],
-  ];
+  ctx.fillStyle = titleColor;
+  ctx.font = "bold 44px system-ui, sans-serif";
+  ctx.fillText(title, cx, 150);
 
-  ctx.font = "16px system-ui, sans-serif";
-  lines.forEach(([label, value], i) => {
-    const y = 230 + i * 28;
-    ctx.fillStyle = COLORS.subtext;
-    ctx.textAlign = "right";
-    ctx.fillText(label, cx - 12, y);
-    ctx.fillStyle = COLORS.text;
-    ctx.textAlign = "left";
-    ctx.fillText(value, cx + 12, y);
-  });
+  if (state.phase !== "fight-cleared") {
+    const s = state.stats;
+    const lines: Array<[string, string]> = [
+      ["Time", `${state.elapsedTime.toFixed(1)}s`],
+      ["Damage dealt", `${Math.round(s.damageDealt)}`],
+      ["Healing done", `${Math.round(s.healingDone)} (${Math.round(s.overhealing)} overheal)`],
+      ["Deaths", `${s.deaths}`],
+    ];
+    ctx.font = "16px system-ui, sans-serif";
+    lines.forEach(([label, value], i) => {
+      const y = 230 + i * 28;
+      ctx.fillStyle = COLORS.subtext;
+      ctx.textAlign = "right";
+      ctx.fillText(label, cx - 12, y);
+      ctx.fillStyle = COLORS.text;
+      ctx.textAlign = "left";
+      ctx.fillText(value, cx + 12, y);
+    });
+  }
 
   ctx.fillStyle = COLORS.subtext;
   ctx.textAlign = "center";
   ctx.font = "15px system-ui, sans-serif";
-  ctx.fillText("Click anywhere (or press a key) to play again", cx, 430);
+  ctx.fillText(footer, cx, 430);
+}
+
+/** The area-select hub. */
+function drawHub(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point | null,
+): void {
+  ctx.fillStyle = "#0c0f15";
+  ctx.fillRect(0, 0, CANVAS.w, CANVAS.h);
+
+  const cx = CANVAS.w / 2;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.fillText("Dungeon Frenzy", cx, 80);
+  ctx.fillStyle = COLORS.subtext;
+  ctx.font = "15px system-ui, sans-serif";
+  ctx.fillText("Choose an area — clear it to unlock the next", cx, 120);
+
+  CONFIG.areas.forEach((area, i) => {
+    const r = areaCardRect(i);
+    const unlocked = areaUnlocked(state, i);
+    const cleared = !!state.clearedAreas[i];
+    const hovered = unlocked && mouse !== null && pointInRect(mouse, r);
+
+    ctx.fillStyle = unlocked ? (hovered ? "#1b2230" : "#141923") : "#0f1219";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = cleared ? COLORS.cleared : unlocked ? "#3a4456" : "#242a36";
+    ctx.lineWidth = cleared || hovered ? 2 : 1;
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = unlocked ? COLORS.subtext : COLORS.locked;
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText(`AREA ${i + 1}`, r.x + r.w / 2, r.y + 16);
+
+    ctx.fillStyle = unlocked ? COLORS.text : COLORS.locked;
+    ctx.font = "bold 16px system-ui, sans-serif";
+    wrapText(ctx, area.name, r.x + r.w / 2, r.y + 42, r.w - 20, 20);
+
+    // Difficulty pips (area index + 1 filled of 5).
+    const pipY = r.y + 96;
+    const pips = CONFIG.areas.length;
+    const pipGap = 16;
+    const pipStart = r.x + r.w / 2 - ((pips - 1) * pipGap) / 2;
+    for (let k = 0; k < pips; k++) {
+      ctx.beginPath();
+      ctx.arc(pipStart + k * pipGap, pipY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = k <= i ? COLORS.threat : "#2a3140";
+      ctx.fill();
+    }
+    ctx.fillStyle = unlocked ? COLORS.subtext : COLORS.locked;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText("difficulty", r.x + r.w / 2, pipY + 14);
+
+    // Status line.
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textBaseline = "bottom";
+    if (cleared) {
+      ctx.fillStyle = COLORS.cleared;
+      ctx.fillText("✓ Cleared", r.x + r.w / 2, r.y + r.h - 16);
+    } else if (unlocked) {
+      ctx.fillStyle = COLORS.armed;
+      ctx.fillText(`Play (${i + 1})`, r.x + r.w / 2, r.y + r.h - 16);
+    } else {
+      ctx.fillStyle = COLORS.locked;
+      ctx.fillText("🔒 Locked", r.x + r.w / 2, r.y + r.h - 16);
+    }
+  });
+}
+
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  cx: number,
+  y: number,
+  maxW: number,
+  lineH: number,
+): void {
+  const words = text.split(" ");
+  let line = "";
+  let yy = y;
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width > maxW && line) {
+      ctx.fillText(line, cx, yy);
+      line = w;
+      yy += lineH;
+    } else {
+      line = test;
+    }
+  }
+  ctx.fillText(line, cx, yy);
 }
 
 // --- primitives ---
@@ -646,8 +808,8 @@ function ring(
 
 interface ButtonState {
   disabled?: boolean;
-  cdFrac?: number; // 0..1 fraction of cooldown remaining
-  cdRemain?: number; // seconds of cooldown remaining
+  cdFrac?: number;
+  cdRemain?: number;
 }
 
 function button(
@@ -684,7 +846,6 @@ function button(
     ctx.fillText(hotkey, r.x + 7, r.y + 5);
   }
 
-  // Cooldown wipe + remaining seconds, drawn last so it sits on top.
   if (cdFrac > 0) {
     ctx.fillStyle = COLORS.cooldown;
     ctx.fillRect(r.x + 1, r.y + 1, r.w - 2, (r.h - 2) * cdFrac);
@@ -707,6 +868,6 @@ function shortName(e: Entity): string {
     case "healer":
       return "H";
     default:
-      return "E";
+      return isBossType(e.enemyType) ? "BOSS" : (e.name.slice(0, 2).toUpperCase());
   }
 }

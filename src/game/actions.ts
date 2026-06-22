@@ -7,8 +7,8 @@ import type { ActionDef, AutoAttackerKind } from "./types";
 const c = CONFIG;
 
 // --- Party auto-attacks (tank / ranger / mage) ---
-// Not on any action bar: idle attackers cast their own swing automatically (see
-// engine.ts). The player controls only the healer.
+// Not on any action bar: idle attackers cast their own swing automatically at the
+// party's focused enemy (see engine.ts). The player controls only the healer.
 
 export const TANK_ATTACK: ActionDef = {
   id: "tank-attack",
@@ -95,60 +95,88 @@ export const AOE_HEAL: ActionDef = {
   effect: { kind: "aoe-heal", amount: c.healer.aoeHeal.heal },
 };
 
-// --- Enemy ---
-
-export const ENEMY_CLAW: ActionDef = {
-  id: "enemy-claw",
-  name: "Claw",
-  castTime: c.enemy.claw.castTime,
-  targeting: "ally-single", // resolved to the priority target at cast start
-  effect: { kind: "damage", amount: c.enemy.claw.damage },
-};
-
-export const ENEMY_LINE: ActionDef = {
-  id: "enemy-line",
-  name: "Cleave",
-  castTime: c.enemy.line.castTime,
-  targeting: "line", // primary (tank) + one random other
-  effect: { kind: "line-damage", amount: c.enemy.line.damage },
-};
-
-export const ENEMY_AOE: ActionDef = {
-  id: "enemy-aoe",
-  name: "Roar",
-  castTime: c.enemy.aoe.castTime,
-  targeting: "party-all",
-  effect: { kind: "aoe-damage", amount: c.enemy.aoe.damage },
-};
-
-export const ENEMY_CLAW_ENRAGED: ActionDef = {
-  ...ENEMY_CLAW,
-  id: "enemy-claw-enraged",
-  name: "Frenzied Claw",
-  castTime: c.enemy.enrage.claw.castTime,
-  effect: { kind: "damage", amount: c.enemy.enrage.claw.damage },
-};
-
-export const ENEMY_LINE_ENRAGED: ActionDef = {
-  ...ENEMY_LINE,
-  id: "enemy-line-enraged",
-  name: "Frenzied Cleave",
-  castTime: c.enemy.enrage.line.castTime,
-  effect: { kind: "line-damage", amount: c.enemy.enrage.line.damage },
-};
-
-export const ENEMY_AOE_ENRAGED: ActionDef = {
-  ...ENEMY_AOE,
-  id: "enemy-aoe-enraged",
-  name: "Roar",
-  castTime: c.enemy.enrage.aoe.castTime,
-  effect: { kind: "aoe-damage", amount: c.enemy.enrage.aoe.damage },
-};
-
 /** The healer's action bar, in display / hotkey (Q W E R) order. */
-export const HEALER_ACTIONS: ActionDef[] = [
-  FAST_HEAL,
-  SLOW_HEAL,
-  RENEW,
-  AOE_HEAL,
-];
+export const HEALER_ACTIONS: ActionDef[] = [FAST_HEAL, SLOW_HEAL, RENEW, AOE_HEAL];
+
+// --- Enemy attack profiles (built per archetype from CONFIG.enemyTypes) ---
+// Each enemy entity carries an `enemyType` id; the engine looks up its profile to
+// pick the next attack from its rotation (enraged variants when frenzied).
+
+export interface EnemyTypeActions {
+  id: string;
+  name: string;
+  isBoss: boolean;
+  maxHp: number;
+  rotation: string[];
+  /** Attack key -> ActionDef. `enraged` is empty unless the type enrages. */
+  normal: Record<string, ActionDef>;
+  enraged: Record<string, ActionDef>;
+  enrage?: { hpFraction: number; damageScale: number; castScale: number };
+}
+
+/** Build one enemy attack ActionDef from a config attack entry, scaling damage/
+ * cast for the enraged variant. `params` is the raw config object for that key. */
+function makeEnemyAttack(
+  typeId: string,
+  key: string,
+  params: any,
+  dmgScale: number,
+  castScale: number,
+  suffix: string,
+): ActionDef {
+  const id = `${typeId}-${key}${suffix}`;
+  const castTime = params.castTime * castScale;
+  switch (key) {
+    case "claw":
+      return { id, name: "Claw", castTime, targeting: "ally-single", effect: { kind: "damage", amount: params.damage * dmgScale } };
+    case "smash":
+      return { id, name: "Heavy Smash", castTime, targeting: "ally-single", effect: { kind: "damage", amount: params.damage * dmgScale } };
+    case "line":
+      return { id, name: "Cleave", castTime, targeting: "line", effect: { kind: "line-damage", amount: params.damage * dmgScale, count: 2 } };
+    case "cleave":
+      return { id, name: "Wide Cleave", castTime, targeting: "line", effect: { kind: "line-damage", amount: params.damage * dmgScale, count: 3 } };
+    case "aoe":
+      return { id, name: "Roar", castTime, targeting: "party-all", effect: { kind: "aoe-damage", amount: params.damage * dmgScale } };
+    case "curse":
+      return { id, name: "Curse", castTime, targeting: "ally-single", effect: { kind: "dot", perTick: params.perTick * dmgScale, interval: params.interval, duration: params.duration } };
+    default:
+      throw new Error(`unknown enemy attack "${key}"`);
+  }
+}
+
+function buildEnemyType(id: string, def: any): EnemyTypeActions {
+  const normal: Record<string, ActionDef> = {};
+  const enraged: Record<string, ActionDef> = {};
+  for (const [key, params] of Object.entries(def.attacks)) {
+    normal[key] = makeEnemyAttack(id, key, params, 1, 1, "");
+    if (def.enrage) {
+      enraged[key] = makeEnemyAttack(id, key, params, def.enrage.damageScale, def.enrage.castScale, "-enraged");
+    }
+  }
+  return {
+    id,
+    name: def.name,
+    isBoss: !!def.isBoss,
+    maxHp: def.maxHp,
+    rotation: [...def.rotation],
+    normal,
+    enraged,
+    enrage: def.enrage,
+  };
+}
+
+/** Built attack profiles for every enemy archetype, keyed by type id. */
+export const ENEMY_TYPES: Record<string, EnemyTypeActions> = Object.fromEntries(
+  Object.entries(CONFIG.enemyTypes).map(([id, def]) => [id, buildEnemyType(id, def)]),
+);
+
+export function enemyType(id: string): EnemyTypeActions {
+  const t = ENEMY_TYPES[id];
+  if (!t) throw new Error(`unknown enemy type "${id}"`);
+  return t;
+}
+
+/** Whether an archetype id is a boss (drives token size + rotation pips). */
+export function isBossType(id: string | undefined): boolean {
+  return !!id && !!ENEMY_TYPES[id]?.isBoss;
+}

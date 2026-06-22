@@ -19,8 +19,33 @@ export function livingParty(state: GameState): Entity[] {
   return state.entities.filter((e) => isParty(e) && e.alive);
 }
 
-export function enemy(state: GameState): Entity | undefined {
-  return state.entities.find((e) => e.kind === "enemy");
+/** All living enemies. */
+export function enemies(state: GameState): Entity[] {
+  return state.entities.filter((e) => e.kind === "enemy" && e.alive);
+}
+
+/** Living enemies in the frontmost row (smallest `row` = closest to the party).
+ * Only these are targetable by the party; back-row enemies are shielded until the
+ * front row is cleared. */
+export function frontRowEnemies(state: GameState): Entity[] {
+  const living = enemies(state);
+  if (living.length === 0) return [];
+  const front = Math.min(...living.map((e) => e.row ?? 0));
+  return living.filter((e) => (e.row ?? 0) === front);
+}
+
+/** The default focus target: the leftmost living front-row enemy. */
+export function frontmostEnemy(state: GameState): Entity | undefined {
+  const front = frontRowEnemies(state);
+  if (front.length === 0) return undefined;
+  return [...front].sort((a, b) => (a.col ?? 0) - (b.col ?? 0))[0];
+}
+
+/** The enemy the party is focus-firing, if it is still a living enemy. */
+export function focusedEnemy(state: GameState): Entity | undefined {
+  if (!state.focusedEnemyId) return undefined;
+  const e = findEntity(state, state.focusedEnemyId);
+  return e && e.alive && e.kind === "enemy" ? e : undefined;
 }
 
 /** The enemy's target-priority skeleton: the tank, then a living damage dealer
@@ -98,16 +123,18 @@ export function applyHeal(
   }
 }
 
+/** Apply a HoT/DoT, refreshing any existing one *of the same hostility* (so a
+ * beneficial Renew and a hostile Curse can ride a member at the same time). */
 export function applyHot(target: Entity, hot: HotInstance): void {
   if (!target.alive) return;
-  // Refresh: a re-applied HoT replaces any existing one rather than stacking.
-  target.hots = [{ ...hot }];
+  const hostile = !!hot.hostile;
+  target.hots = [...target.hots.filter((h) => !!h.hostile !== hostile), { ...hot }];
 }
 
-/** Advance every living entity's HoTs by dt, applying ticks as they come due.
- * Assumes callers step with dt below the smallest HoT interval (main.ts clamps
- * to 0.1s, the sim harness uses 0.05s); a single dt larger than the interval
- * would drop the ticks it skipped over. */
+/** Advance every living entity's HoTs/DoTs by dt, applying ticks as they come due.
+ * Hostile ticks deal damage; friendly ticks heal. Assumes callers step with dt
+ * below the smallest interval (main.ts clamps to 0.1s, the sim uses 0.05s); a
+ * single dt larger than the interval would drop the ticks it skipped over. */
 export function tickHots(state: GameState, dt: number): void {
   for (const e of state.entities) {
     if (!e.alive || e.hots.length === 0) continue;
@@ -115,8 +142,10 @@ export function tickHots(state: GameState, dt: number): void {
       hot.duration -= dt;
       hot.sinceTick += dt;
       while (hot.sinceTick >= hot.interval && hot.duration > -hot.interval) {
-        applyHeal(state, e, hot.perTick);
+        if (hot.hostile) applyDamage(state, e, hot.perTick);
+        else applyHeal(state, e, hot.perTick);
         hot.sinceTick -= hot.interval;
+        if (!e.alive) break; // a hostile tick may have killed it
       }
     }
     e.hots = e.hots.filter((h) => h.duration > 0);

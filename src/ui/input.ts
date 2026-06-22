@@ -2,16 +2,25 @@
 // caster unit — there is no unit-selection step. Hotkeys / buttons ARM a spell;
 // clicking a target ally casts it; the armed spell stays armed (sticky) so you
 // can keep clicking targets. There is no queue: an order issued while the healer
-// is mid-cast replaces that cast (interrupting wastes nothing).
-// Returns restart=true when any input dismisses the end screen.
+// is mid-cast replaces that cast (interrupting wastes nothing). Clicking a
+// front-row enemy sets the party's focus-fire target.
 
 import type { Point } from "../game/hex";
-import { cancelCast, issueOrder } from "../game/engine";
+import {
+  advanceFight,
+  cancelCast,
+  issueOrder,
+  returnToHub,
+  setFocus,
+  startArea,
+} from "../game/engine";
 import { HEALER_ACTIONS } from "../game/actions";
+import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
 import {
   actionButtons,
+  areaCardRect,
   partyFrameRect,
   pointInRect,
   pointInToken,
@@ -40,6 +49,11 @@ export function healerOf(state: GameState): Entity | undefined {
   return state.entities.find((e) => e.kind === "healer");
 }
 
+/** An area is playable if it's the first or the previous one has been cleared. */
+export function areaUnlocked(state: GameState, i: number): boolean {
+  return i === 0 || !!state.clearedAreas[i - 1];
+}
+
 export function canAfford(e: Entity, def: ActionDef): boolean {
   return def.manaCost === undefined || e.mana >= def.manaCost;
 }
@@ -49,8 +63,7 @@ function offCooldown(e: Entity, def: ActionDef): boolean {
 }
 
 /** Is this spell castable right now? Drives input rejection and the greyed-out
- * button. With no queue, an order takes effect immediately (replacing any cast
- * in progress), so mana and cooldown are always checked. */
+ * button. */
 export function canUse(state: GameState, def: ActionDef): boolean {
   const h = healerOf(state);
   if (!h || !h.alive) return false;
@@ -59,14 +72,32 @@ export function canUse(state: GameState, def: ActionDef): boolean {
   return true;
 }
 
-export function handleClick(state: GameState, p: Point): { restart: boolean } {
-  if (state.phase !== "playing") return { restart: true };
+export function handleClick(state: GameState, p: Point): void {
+  // Non-playing phases: the hub picks an area; the interstitials/overlays advance.
+  if (state.phase === "area-select") {
+    for (let i = 0; i < CONFIG.areas.length; i++) {
+      if (pointInRect(p, areaCardRect(i)) && areaUnlocked(state, i)) {
+        startArea(state, i);
+        return;
+      }
+    }
+    return;
+  }
+  if (state.phase === "fight-cleared") {
+    advanceFight(state);
+    return;
+  }
+  if (state.phase === "area-cleared" || state.phase === "defeat") {
+    returnToHub(state);
+    return;
+  }
 
+  // Playing.
   // 1. Spell buttons (always the healer's four heals).
   for (const b of actionButtons()) {
     if (pointInRect(p, b.rect)) {
       onSpellButton(state, b.def);
-      return { restart: false };
+      return;
     }
   }
 
@@ -75,43 +106,51 @@ export function handleClick(state: GameState, p: Point): { restart: boolean } {
   for (let i = 0; i < slots.length; i++) {
     if (pointInRect(p, partyFrameRect(i))) {
       castOnTarget(state, slots[i]);
-      return { restart: false };
+      return;
     }
   }
 
-  // 3. Clicking an entity token: cast on an ally; the enemy can't be targeted.
-  const clicked = state.entities.find((e) => e.alive && pointInToken(p, e));
-  if (clicked && isParty(clicked)) castOnTarget(state, clicked);
-
-  // 4. Clicking the enemy or empty space is a no-op (Escape clears the spell).
-  return { restart: false };
+  // 3. Clicking an entity token: cast on an ally, or focus a front-row enemy.
+  const clicked = state.entities.find((e) => e.alive && pointInToken(state, p, e));
+  if (clicked) {
+    if (isParty(clicked)) castOnTarget(state, clicked);
+    else if (clicked.kind === "enemy") setFocus(state, clicked.id); // front-row only
+  }
 }
 
-export function handleKey(
-  state: GameState,
-  rawKey: string,
-): { restart: boolean } {
-  if (state.phase !== "playing") return { restart: true };
+export function handleKey(state: GameState, rawKey: string): void {
   const key = rawKey.toLowerCase();
+
+  // Non-playing phases: any key continues; the hub also takes 1-N to pick an area.
+  if (state.phase !== "playing") {
+    if (state.phase === "fight-cleared") {
+      advanceFight(state);
+    } else if (state.phase === "area-cleared" || state.phase === "defeat") {
+      returnToHub(state);
+    } else if (state.phase === "area-select" && key >= "1" && key <= "9") {
+      const i = Number(key) - 1;
+      if (i < CONFIG.areas.length && areaUnlocked(state, i)) startArea(state, i);
+    }
+    return;
+  }
 
   // Number keys cast the armed spell on a party member by slot.
   if (key >= "1" && key <= "9") {
     const slot = partySlots(state)[Number(key) - 1];
     if (slot) castOnTarget(state, slot);
-    return { restart: false };
+    return;
   }
 
   if (key === "escape") {
     state.armedSpellId = undefined;
-    return { restart: false };
+    return;
   }
 
-  // Stop-cast: abort the healer's current cast. Mana/cooldown only commit on
-  // completion, so this is free.
+  // Stop-cast: abort the healer's current cast (free).
   if (key === "x") {
     const h = healerOf(state);
     if (h) cancelCast(state, h.id);
-    return { restart: false };
+    return;
   }
 
   // Ability keys arm the healer's spells, left to right.
@@ -120,7 +159,6 @@ export function handleKey(
     const def = HEALER_ACTIONS[idx];
     if (def) onSpellButton(state, def);
   }
-  return { restart: false };
 }
 
 /** Cast the armed spell on `ally` (replacing any cast in progress). The spell
@@ -136,7 +174,6 @@ function castOnTarget(state: GameState, ally: Entity): void {
 function onSpellButton(state: GameState, def: ActionDef): void {
   const h = healerOf(state);
   if (!h || !h.alive) return;
-
   if (!canUse(state, def)) return; // button renders greyed out
 
   // Arm the spell (sticky until Esc or another spell). Re-pressing the armed

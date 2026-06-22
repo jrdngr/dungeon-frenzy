@@ -11,7 +11,7 @@ if (!canvas) throw new Error("Missing #game canvas");
 const ctx = canvas.getContext("2d");
 if (!ctx) throw new Error("Could not get 2D context");
 
-let state = createInitialState();
+const state = createInitialState();
 let mouse: Point | null = null;
 
 /** Translate a mouse event into canvas-space coordinates (the canvas is scaled
@@ -26,8 +26,7 @@ function canvasPoint(ev: MouseEvent): Point {
 
 canvas.addEventListener("click", (ev) => {
   unlock(); // browsers only allow audio after a user gesture
-  const result = handleClick(state, canvasPoint(ev));
-  if (result.restart) state = createInitialState();
+  handleClick(state, canvasPoint(ev));
 });
 
 canvas.addEventListener("mousemove", (ev) => {
@@ -46,8 +45,7 @@ window.addEventListener("keydown", (ev) => {
     toggleMute();
     return;
   }
-  const result = handleKey(state, ev.key);
-  if (result.restart) state = createInitialState();
+  handleKey(state, ev.key);
 });
 
 let last = performance.now();

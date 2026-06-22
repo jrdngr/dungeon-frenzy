@@ -7,7 +7,8 @@ export type AutoAttackerKind = "tank" | "ranger" | "mage";
 export type EntityKind = AutoAttackerKind | "healer" | "enemy";
 
 /** Axial hex coordinate. Movement is gone — positions are fixed — but the grid
- * is real so the battlefield can be drawn and later iterations can re-add it. */
+ * is real so the party column can be drawn. Enemies are positioned from their
+ * formation (row/col) by the UI, not from this. */
 export interface Hex {
   q: number;
   r: number;
@@ -15,18 +16,21 @@ export interface Hex {
 
 /** What an action is allowed to target. */
 export type Targeting =
-  | "enemy" // the single enemy (party auto-attacks)
-  | "ally-single" // one chosen living party member (single-target heals)
+  | "enemy" // the party's focused enemy (party auto-attacks)
+  | "ally-single" // one chosen living party member (single-target heals; enemy claw/smash/curse)
   | "party-all" // all living party members (AoE heal / enemy AoE)
-  | "line"; // enemy linear hit: a primary target plus one random other
+  | "line"; // enemy linear hit: a primary target plus N-1 random others
 
 export type Effect =
   | { kind: "damage"; amount: number }
   | { kind: "heal"; amount: number }
   | { kind: "hot"; perTick: number; interval: number; duration: number }
+  // Hostile heal-over-time (Curse): ticks deal damage to a party member.
+  | { kind: "dot"; perTick: number; interval: number; duration: number }
   | { kind: "aoe-heal"; amount: number } // heals all living party
   | { kind: "aoe-damage"; amount: number } // damages all living party (enemy)
-  | { kind: "line-damage"; amount: number }; // primary + one random other
+  // primary + (count-1) random others. Line = 2, Wide Cleave = 3.
+  | { kind: "line-damage"; amount: number; count: number };
 
 export interface ActionDef {
   id: string;
@@ -46,17 +50,19 @@ export interface ActionInstance {
   def: ActionDef;
   elapsed: number; // seconds elapsed into the cast
   targetId?: string;
-  /** Line attacks pick a second victim at cast start so the telegraph can show
-   * both lines; it is re-validated when the hit lands. */
-  secondaryTargetId?: string;
+  /** Line/Cleave attacks pick all their victims at cast start (so the telegraph
+   * can show every line); they are re-validated when the hit lands. */
+  victimIds?: string[];
 }
 
-/** An active heal-over-time effect riding on an entity. */
+/** An active heal-over-time effect riding on an entity. Hostile instances
+ * (Curse) tick damage instead of healing. */
 export interface HotInstance {
   perTick: number;
   interval: number; // seconds between ticks
   duration: number; // total seconds remaining
   sinceTick: number; // seconds accumulated toward the next tick
+  hostile?: boolean; // true = damage tick (Curse), false/undefined = heal
 }
 
 export interface Entity {
@@ -67,7 +73,7 @@ export interface Entity {
   maxHp: number;
   mana: number; // 0 for entities without a resource
   maxMana: number; // 0 = no mana bar
-  hex: Hex;
+  hex: Hex; // party formation; enemies are laid out from row/col by the UI
   current?: ActionInstance; // undefined = idle
   hots: HotInstance[];
   /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready). */
@@ -77,6 +83,12 @@ export interface Entity {
   actionCount: number;
   /** Enemy-only: true once HP drops below the enrage threshold. */
   enraged: boolean;
+  /** Enemy-only: archetype id -> attack profile (see config.enemyTypes). */
+  enemyType?: string;
+  /** Enemy-only formation: row (0 = front, closest to party) and column. Only
+   * the frontmost living row is targetable by the party. */
+  row?: number;
+  col?: number;
 }
 
 /** Things that just happened, for floating combat text and other feedback.
@@ -86,23 +98,44 @@ export type GameEvent =
   | { kind: "heal"; entityId: string; amount: number; at: number }
   | { kind: "enrage"; entityId: string; at: number };
 
-/** Cumulative battle stats, shown on the end screen. */
+/** Cumulative battle stats for one area attempt, shown on the end overlays. */
 export interface Stats {
-  damageDealt: number; // party -> enemy
+  damageDealt: number; // party -> enemies
   healingDone: number; // effective healing (excludes overheal)
   overhealing: number;
   deaths: number;
 }
 
-export type GamePhase = "playing" | "won" | "lost";
+/** Game flow:
+ * - area-select: the hub; pick an unlocked area.
+ * - playing: a fight is in progress.
+ * - fight-cleared: a fight was won and more remain; waiting for the player to
+ *   continue (applies the between-fight recovery).
+ * - area-cleared: the area's last fight was won.
+ * - defeat: the party was wiped (or left unable to win). */
+export type GamePhase =
+  | "area-select"
+  | "playing"
+  | "fight-cleared"
+  | "area-cleared"
+  | "defeat";
 
 export interface GameState {
   entities: Entity[];
   /** The healer's currently armed spell, awaiting a target click. The healer is
    * the implicit, always-the-caster unit; there is no unit-selection step. */
   armedSpellId?: string;
+  /** The enemy the party focus-fires. Always a living front-row enemy; the
+   * player sets it by clicking a front-row enemy. */
+  focusedEnemyId?: string;
+  /** Which area is being played, and which of its 3 fights (0-based). */
+  areaIndex: number;
+  fightIndex: number;
+  /** Per-area cleared flags (length = number of areas) — drives the hub's
+   * sequential unlock. In-memory only. */
+  clearedAreas: boolean[];
   phase: GamePhase;
-  elapsedTime: number; // total game seconds the battle has run
+  elapsedTime: number; // seconds the current area attempt has run
   events: GameEvent[];
   stats: Stats;
 }

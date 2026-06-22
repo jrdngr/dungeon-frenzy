@@ -12,9 +12,10 @@ let ctx: AudioContext | null = null;
 let muted = true; // sound off by default; the M key toggles it back on
 
 let lastEventAt = 0;
-let prevPhase: GamePhase = "playing";
+let prevPhase: GamePhase = "area-select";
 let prevRoar = false;
 let prevLine = false;
+let prevSmash = false;
 let prevHealerCast: string | undefined;
 let prevCooldowns = new Set<string>();
 
@@ -73,7 +74,7 @@ export function updateAudio(state: GameState): void {
     lastEventAt = 0;
     prevRoar = false;
     prevLine = false;
-    prevPhase = "playing";
+    prevSmash = false;
     prevHealerCast = undefined;
     prevCooldowns = new Set();
   }
@@ -97,23 +98,32 @@ export function updateAudio(state: GameState): void {
   }
   prevCooldowns = nowCooldowns;
 
-  const en = state.entities.find((e) => e.kind === "enemy");
+  const casting = (pred: (e: GameState["entities"][number]) => boolean) =>
+    state.entities.some((e) => e.kind === "enemy" && e.alive && !!e.current && pred(e));
 
-  // Roar (AoE) cast start: rising two-tone warning.
-  const roar = !!en?.alive && en.current?.def.effect.kind === "aoe-damage";
+  // Roar (AoE) cast start by any enemy: rising two-tone warning.
+  const roar = casting((e) => e.current!.def.effect.kind === "aoe-damage");
   if (roar && !prevRoar) {
     beep(330, 0.16, "square", 0.035);
     beep(440, 0.22, "square", 0.035, 0.16);
   }
   prevRoar = roar;
 
-  // Cleave (line) cast start: descending two-tone — the healer might be hit.
-  const line = !!en?.alive && en.current?.def.effect.kind === "line-damage";
+  // Cleave (line/wide) cast start: descending two-tone — the backline might be hit.
+  const line = casting((e) => e.current!.def.effect.kind === "line-damage");
   if (line && !prevLine) {
     beep(415, 0.14, "square", 0.03);
     beep(311, 0.18, "square", 0.03, 0.14);
   }
   prevLine = line;
+
+  // Heavy Smash wind-up: a low, ominous tone — pre-heal the tank or it dies.
+  const smash = casting((e) => e.current!.def.name === "Heavy Smash");
+  if (smash && !prevSmash) {
+    beep(150, 0.28, "sawtooth", 0.05);
+    beep(120, 0.34, "sawtooth", 0.045, 0.16);
+  }
+  prevSmash = smash;
 
   // Event-driven cues.
   for (const ev of state.events) {
@@ -125,13 +135,17 @@ export function updateAudio(state: GameState): void {
   }
   lastEventAt = state.elapsedTime;
 
-  // Win / lose stingers.
+  // Phase-transition stingers.
   if (state.phase !== prevPhase) {
-    if (state.phase === "won") {
+    if (state.phase === "fight-cleared") {
+      // A brief two-note "fight done" — softer than the full area fanfare.
+      beep(587, 0.1);
+      beep(784, 0.16, "sine", 0.05, 0.1);
+    } else if (state.phase === "area-cleared") {
       beep(523, 0.14);
       beep(659, 0.14, "sine", 0.05, 0.14);
       beep(784, 0.3, "sine", 0.05, 0.28);
-    } else if (state.phase === "lost") {
+    } else if (state.phase === "defeat") {
       beep(220, 0.3);
       beep(165, 0.5, "sine", 0.05, 0.25);
     }
