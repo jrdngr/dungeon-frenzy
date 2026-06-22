@@ -51,7 +51,7 @@ export const CONFIG = {
     // rolling anchor (small net mana drain); Fast is the fast (1s) but draining
     // panic button — leaning on it is how you go OOM.
     fastHeal: { castTime: 1.0, cooldown: 0.5, heal: 15, mana: 10 }, // recast 1.5s
-    slowHeal: { castTime: 3.0, cooldown: 2.0, heal: 30, mana: 15 }, // recast 5s
+    slowHeal: { castTime: 3.0, cooldown: 0.5, heal: 30, mana: 15 }, // recast 3.5s
     hot: { castTime: 1.0, cooldown: 5.0, perTick: 5, interval: 1.0, duration: 10.0, mana: 20 }, // 50 over 10s
     aoeHeal: { castTime: 3.0, cooldown: 7.0, heal: 15, mana: 25 }, // all party, recast 10s
     // Skill-tree unlock: revive a DEAD ally. The long cast + mana cost is the price.

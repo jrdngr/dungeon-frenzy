@@ -117,6 +117,8 @@ export interface Entity {
 export type GameEvent =
   | { kind: "damage"; entityId: string; amount: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
+  // Skill points awarded for a kill, floated over the dying enemy.
+  | { kind: "sp"; entityId: string; amount: number; at: number }
   | { kind: "enrage"; entityId: string; at: number };
 
 /** Cumulative battle stats for one area attempt, shown on the end overlays. */

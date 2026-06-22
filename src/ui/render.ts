@@ -529,6 +529,20 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
       continue;
     }
 
+    // SP reward floats higher and lingers longer than a damage number so the kill
+    // payoff reads clearly over the corpse.
+    if (ev.kind === "sp") {
+      const SP_LIFE = 1.7;
+      if (age > SP_LIFE) continue;
+      const t = age / SP_LIFE;
+      ctx.globalAlpha = 1 - t * t;
+      ctx.fillStyle = COLORS.xp;
+      ctx.font = "bold 15px system-ui, sans-serif";
+      ctx.fillText(`+${ev.amount} SP`, c.x, c.y - radius - 38 - t * 30);
+      ctx.globalAlpha = 1;
+      continue;
+    }
+
     if (age > FCT_LIFE) continue;
     const t = age / FCT_LIFE;
     const x = c.x + Math.sin(ev.at * 137.1) * 14;
@@ -744,16 +758,20 @@ function drawSpellTooltip(
 function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
   const area = CONFIG.areas[state.areaIndex];
   const fights = area.fights.length;
-  ctx.fillStyle = COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(
-    `${area.name} — Fight ${state.fightIndex + 1}/${fights}  ·  ${state.elapsedTime.toFixed(1)}s`,
-    12,
-    12,
-  );
+  const left = `${area.name} — Fight ${state.fightIndex + 1}/${fights}  ·  ${state.elapsedTime.toFixed(1)}s  ·  `;
+  ctx.fillStyle = COLORS.subtext;
+  ctx.fillText(left, 12, 12);
+  const spX = 12 + ctx.measureText(left).width; // measured with the non-bold font
+  // Total unspent SP, in gold so the running tally stands out from the run info.
+  ctx.fillStyle = COLORS.xp;
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.fillText(`${state.skillPoints} SP`, spX, 12);
 
+  ctx.fillStyle = COLORS.subtext;
+  ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "right";
   ctx.fillText(
     "hotkey/click spell · number/click ally to cast · click enemy to focus · X stop · Esc clear · M mute",
@@ -903,16 +921,17 @@ function drawHub(
   ctx.font = "bold 16px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("Skill Tree", stb.x + stb.w / 2, stb.y + stb.h / 2 - (hasSP ? 8 : 0));
-  if (hasSP) {
-    ctx.fillStyle = COLORS.cleared;
-    ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.fillText(
-      `${state.skillPoints} skill point${state.skillPoints > 1 ? "s" : ""} to spend`,
-      stb.x + stb.w / 2,
-      stb.y + stb.h / 2 + 11,
-    );
-  }
+  ctx.fillText("Skill Tree", stb.x + stb.w / 2, stb.y + stb.h / 2 - 8);
+  // Always surface the SP count; green/"to spend" when there's something to spend.
+  ctx.fillStyle = hasSP ? COLORS.cleared : COLORS.subtext;
+  ctx.font = "bold 11px system-ui, sans-serif";
+  ctx.fillText(
+    hasSP
+      ? `${state.skillPoints} skill point${state.skillPoints > 1 ? "s" : ""} to spend`
+      : "0 skill points",
+    stb.x + stb.w / 2,
+    stb.y + stb.h / 2 + 11,
+  );
 }
 
 /** The full-screen skill-tree overlay (only over the hub). */
