@@ -2,9 +2,14 @@
 
 A real-time **healing game**. You play the party's **healer** — a fixed,
 auto-fighting party (tank + ranger + mage + you) does the killing, and your only
-job is to keep them alive by juggling four timed, mana-costed, cooldown-gated
-heals. The tension is a **mana-starvation race**: your heals out-spend mana regen,
-so the pool drains and you have to win before it runs dry.
+job is to keep them alive by juggling timed, mana-costed, cooldown-gated heals.
+The tension is a **mana-starvation race**: your heals out-spend mana regen, so the
+pool drains and you have to win before it runs dry.
+
+You start with a single heal. Killing enemies earns **XP**; levels grant **skill
+points** you spend in a node-based **skill tree** to unlock more heals, raise your
+sustain, and give the party auto-cast abilities (shields, thorns, nukes, AoE,
+DoTs) — enough to push past walls the base kit can't.
 
 Built with **TypeScript + HTML5 Canvas + Vite**. Everything is immobile — the hex
 grid is visual layout only.
@@ -38,30 +43,58 @@ to retry; cleared progress is in-memory only.
   whole party; Curse is a hostile damage-over-time on the backline. Late bosses
   **enrage** below 15% HP.
 
+## Progression: XP, levels & the skill tree
+
+Every enemy killed grants **XP** (more for bosses and later areas). Crossing a
+level threshold grants **5 skill points**; XP, level, and points **persist across
+runs and deaths** (in-memory — a page reload resets everything, like cleared
+progress), so you can always grind an area open. A first-try campaign is worth
+~50 SP, about a quarter of the ~175-SP tree.
+
+Open the **Skill Tree** from the hub and spend points across three branches that
+radiate from the free center **Heal** node:
+
+- **Healing** — unlock Quick Heal, Regen, Group Heal, and Resurrect, plus per-spell
+  potency / efficiency / cast-time upgrades.
+- **Sustain** — more max mana and regen, better between-fight recovery, crit heals,
+  and an Overheal Shield (overhealing becomes a temporary absorb).
+- **Party** — a sub-branch per member: more HP/damage plus auto-cast abilities the
+  tank/ranger/mage fire on cooldown (tank shields & thorns; ranger Aimed Shot /
+  Volley / Serpent Sting; mage Fireball / Firestorm / Arcane Conduit).
+
+Spell unlocks and capstones cost more than small upgrades, and the tree is far
+bigger than one campaign's points — so each run is a build, not a checklist.
+
 ## The healer's kit
 
-Four spells, hotkeys **Q W E R**. Cast time is the cast; cooldown is a post-cast
-lockout (recast = cast + cooldown). Mana pool is 100, regenerating 1.5/s.
+You begin with just **Heal**; the rest are skill-tree unlocks that join the bar in
+unlock order (hotkeys **Q W E R T**). Cast time is the cast; cooldown is a
+post-cast lockout (recast = cast + cooldown). Base mana pool is 100, regenerating
+1.5/s — both raised by the Sustain branch.
 
 | Spell | Heal | Mana | Cast | Cooldown | Role |
 |-------|-----:|-----:|-----:|---------:|------|
-| Fast Heal  | 15 | 10 | 1.0s | 0.5s | Fast, inefficient panic button (drains mana) |
-| Slow Heal  | 30 | 15 | 3.0s | 2.0s | Efficient workhorse, too slow for sudden spikes |
-| Renew      | 50 over 10s (5/s) | 20 | 1.0s | 5.0s | Cheap rolling anchor (heal-over-time) |
+| Heal       | 30 | 15 | 3.0s | 2.0s | Starting spell; efficient workhorse, too slow for spikes |
+| Quick Heal | 15 | 10 | 1.0s | 0.5s | Fast, inefficient panic button (drains mana) |
+| Regen      | 50 over 10s (5/s) | 20 | 1.0s | 5.0s | Cheap rolling anchor (heal-over-time) |
 | Group Heal | 15 to all (60 total) | 25 | 3.0s | 7.0s | Expensive "everyone's hurt" AoE |
+| Resurrect  | 10% max HP | 30 | 5.0s | — | Revive a dead ally mid-fight |
 
-Efficiency (HP per mana) runs **Renew 2.5 > Group 2.4 > Slow 2.0 > Fast 1.5** —
-spamming the inefficient Fast Heal is how you go dry.
+Efficiency (HP per mana) runs **Regen 2.5 > Group 2.4 > Heal 2.0 > Quick 1.5** —
+spamming the inefficient Quick Heal is how you go dry. Per-spell tree nodes raise
+the heal amount, cut mana cost, and shave cast time.
 
 ## Controls
 
 The healer is always the implicit caster — there's no unit-selection step.
-**Arm** a spell with its hotkey (Q/W/E/R) or by clicking its button, then **cast**
-it by clicking an ally (or pressing 1–4); the spell stays armed. Group Heal still
-needs a target click even though it hits everyone. There is **no queue** — an
-order issued mid-cast *replaces* the cast in progress (mana/cooldown only commit
-on completion, so interrupting wastes nothing). `X` stops the current cast, `Esc`
-clears the armed spell, `M` mutes.
+**Arm** a spell with its hotkey (Q/W/E/R/T, one per unlocked spell) or by clicking
+its button, then **cast** it by clicking an ally (or pressing its number); the
+spell stays armed. Group Heal still needs a target click even though it hits
+everyone; Resurrect targets a *dead* ally. There is **no queue** — an order issued
+mid-cast *replaces* the cast in progress (mana/cooldown only commit on completion,
+so interrupting wastes nothing). `X` stops the current cast, `Esc` clears the armed
+spell (or closes the skill tree), `M` mutes. The **Skill Tree** button on the hub
+opens the node tree to spend skill points.
 
 ## Repo layout
 
@@ -75,10 +108,13 @@ src/game/                Pure simulation — NO canvas/DOM imports here.
   types.ts               Core data model (Entity, ActionDef, GameState, ...).
   hex.ts                 Axial hex coordinates + hex->pixel layout.
   actions.ts             Static action defs + the enemy-archetype attack registry.
-  combat.ts              Pure effect resolution (damage, heal, HoT/DoT ticks) +
-                         enemy/focus/front-row helpers.
+  combat.ts              Pure effect resolution (damage, heal, HoT/DoT ticks,
+                         shields) + enemy/focus/front-row helpers.
+  skills.ts              Pure skill-tree derivation: turns purchased skills into
+                         effective stats, the healer's bar, and party abilities.
   engine.ts              createInitialState/startArea/advanceFight + update(): the
-                         simulation, including the area -> fight progression.
+                         simulation, the area -> fight progression, XP/leveling,
+                         and spendSkillPoint.
 src/ui/                  Rendering + input — all canvas/DOM lives here.
   layout.ts              Screen geometry (entity positions, bars, buttons) + hit-testing.
   render.ts              Draws everything from GameState; never mutates it.
