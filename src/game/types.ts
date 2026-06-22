@@ -182,6 +182,10 @@ export interface GameState {
   // only by createInitialState). In-memory only — no localStorage. Killing an enemy
   // grants skill points directly (its archetype's `sp`); there are no levels. ---
   skillPoints: number; // unspent skill points
+  /** Snapshot of `skillPoints` when the current area run began. SP earned during a
+   * run only banks by clearing the area or dying; quitting mid-run forfeits the
+   * gains by rolling `skillPoints` back to this value. */
+  runStartSkillPoints: number;
   skills: Record<string, number>; // node id -> ranks purchased ({ heal: 1 } at start)
   /** UI-only: the skill-tree overlay is open (only meaningful at the hub). */
   skillTreeOpen?: boolean;

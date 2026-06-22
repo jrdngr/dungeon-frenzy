@@ -10,6 +10,7 @@ import {
   advanceFight,
   cancelCast,
   issueOrder,
+  quitArea,
   returnToHub,
   setFocus,
   spendSkillPoint,
@@ -107,9 +108,10 @@ export function handleClick(state: GameState, p: Point): void {
   }
 
   // Playing.
-  // 0. Quit the area (abandon the run, no progress) and return to the hub.
+  // 0. Quit the area: abandon the run (forfeiting SP earned this run) and return
+  //    to the hub.
   if (pointInRect(p, quitButtonRect())) {
-    returnToHub(state);
+    quitArea(state);
     return;
   }
 

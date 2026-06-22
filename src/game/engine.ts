@@ -58,6 +58,7 @@ export function createInitialState(): GameState {
     events: [],
     stats: emptyStats(),
     skillPoints: 0,
+    runStartSkillPoints: 0,
     skills: { heal: 1 }, // the center Heal spell starts owned/free
     skillTreeOpen: false,
   };
@@ -110,6 +111,8 @@ export function startArea(state: GameState, areaIndex: number): void {
   state.events = [];
   state.stats = emptyStats();
   state.armedSpellId = undefined;
+  // Bank the SP carried in; anything earned this run is forfeit if the player quits.
+  state.runStartSkillPoints = state.skillPoints;
   // Layer skill-tree bonuses onto the base config when the party is (re)built.
   const party = effectiveParty(state.skills);
   const healer = effectiveHealer(state.skills);
@@ -182,13 +185,23 @@ export function advanceFight(state: GameState): void {
 }
 
 /** Return to the area-select hub (from an end overlay), keeping cleared progress.
- * Progression (skillPoints/skills) persists — it is never reset here. */
+ * Progression (skillPoints/skills) persists — it is never reset here. SP earned
+ * this run banks here because reaching an end overlay means the area was cleared
+ * or the party died (the only ways to keep run SP). */
 export function returnToHub(state: GameState): void {
   state.phase = "area-select";
   state.entities = [];
   state.armedSpellId = undefined;
   state.focusedEnemyId = undefined;
   state.events = [];
+}
+
+/** Abandon the run mid-fight (the Quit Area button): forfeit every SP earned this
+ * run by rolling back to the run-start snapshot, then return to the hub. Clearing
+ * the area or dying is the only way to keep run SP. */
+export function quitArea(state: GameState): void {
+  state.skillPoints = state.runStartSkillPoints;
+  returnToHub(state);
 }
 
 /** Spend a skill point on the next rank of a node (hub only). Returns whether it

@@ -618,7 +618,7 @@ function drawPanel(
     });
   });
 
-  drawQuitButton(ctx, mouse);
+  drawQuitButton(ctx, state, mouse);
 }
 
 /** The healer's cast-progress bar, centered above the spell buttons. Mirrors the
@@ -653,8 +653,13 @@ function drawHealerCastBar(ctx: CanvasRenderingContext2D, state: GameState): voi
   }
 }
 
-/** "Quit Area" button: abandon the run and go back to the hub (no progress kept). */
-function drawQuitButton(ctx: CanvasRenderingContext2D, mouse: Point | null): void {
+/** "Quit Area" button: abandon the run and go back to the hub. Quitting forfeits
+ * the SP earned this run, so warn when there's any at stake. */
+function drawQuitButton(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point | null,
+): void {
   const r = quitButtonRect();
   const hovered = mouse !== null && pointInRect(mouse, r);
   ctx.fillStyle = hovered ? "#2a1b1f" : "#1b1115";
@@ -668,9 +673,16 @@ function drawQuitButton(ctx: CanvasRenderingContext2D, mouse: Point | null): voi
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("Quit Area", r.x + r.w / 2, r.y + r.h / 2 - 7);
-  ctx.fillStyle = "#7a818f";
+
+  const runSp = state.skillPoints - state.runStartSkillPoints;
   ctx.font = "10px system-ui, sans-serif";
-  ctx.fillText("back to map", r.x + r.w / 2, r.y + r.h / 2 + 9);
+  if (runSp > 0) {
+    ctx.fillStyle = COLORS.hpLow;
+    ctx.fillText(`forfeit ${runSp} SP`, r.x + r.w / 2, r.y + r.h / 2 + 9);
+  } else {
+    ctx.fillStyle = "#7a818f";
+    ctx.fillText("back to map", r.x + r.w / 2, r.y + r.h / 2 + 9);
+  }
 }
 
 function HEALER_SPELL(state: GameState, id: string): ActionDef | undefined {
