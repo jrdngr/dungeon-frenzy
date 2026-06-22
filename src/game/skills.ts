@@ -27,24 +27,6 @@ export function rankOf(skills: Skills, id: string): number {
   return skills[id] ?? 0;
 }
 
-// --- Leveling -------------------------------------------------------------
-
-/** Cumulative XP required to REACH a level (level 1 = 0). Past the threshold
- * table, each further level costs a flat `thresholdRamp` more XP. */
-export function xpToReachLevel(level: number): number {
-  const t = CONFIG.progression.levelThresholds;
-  if (level <= 1) return 0;
-  if (level <= t.length) return t[level - 1];
-  return t[t.length - 1] + (level - t.length) * CONFIG.progression.thresholdRamp;
-}
-
-/** The level a given total XP has reached. */
-export function levelForXp(totalXp: number): number {
-  let level = 1;
-  while (xpToReachLevel(level + 1) <= totalXp) level++;
-  return level;
-}
-
 // --- Purchasing -----------------------------------------------------------
 
 /** SP cost of the next rank of a node, or null if already maxed. */

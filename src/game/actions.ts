@@ -108,8 +108,8 @@ export interface EnemyTypeActions {
   name: string;
   isBoss: boolean;
   maxHp: number;
-  /** XP granted to the player when this enemy is killed. */
-  xp: number;
+  /** Skill points granted to the player when this enemy is killed. */
+  sp: number;
   rotation: string[];
   /** Attack key -> ActionDef. `enraged` is empty unless the type enrages. */
   normal: Record<string, ActionDef>;
@@ -161,7 +161,7 @@ function buildEnemyType(id: string, def: any): EnemyTypeActions {
     name: def.name,
     isBoss: !!def.isBoss,
     maxHp: def.maxHp,
-    xp: def.xp,
+    sp: def.sp,
     rotation: [...def.rotation],
     normal,
     enraged,

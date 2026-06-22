@@ -7,12 +7,7 @@ import {
   frontRowEnemies,
 } from "../game/combat";
 import { enemyType, isBossType } from "../game/actions";
-import {
-  canPurchase,
-  nextNodeCost,
-  rankOf,
-  xpToReachLevel,
-} from "../game/skills";
+import { canPurchase, nextNodeCost, rankOf } from "../game/skills";
 import { CONFIG, SKILL_NODES } from "../game/config";
 import type { ActionDef, Entity, GameState, SkillNode } from "../game/types";
 import { isParty } from "../game/types";
@@ -102,7 +97,6 @@ export function render(
 
   if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, state, mouse);
   if (state.phase !== "playing") drawOverlay(ctx, state);
-  drawLevelUpToast(ctx, state);
 }
 
 function tracePath(ctx: CanvasRenderingContext2D, pts: Point[]): void {
@@ -519,7 +513,6 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
   ctx.textBaseline = "bottom";
   for (const ev of state.events) {
     const age = state.elapsedTime - ev.at;
-    if (ev.kind === "level-up") continue; // screen toast, drawn separately (not entity-anchored)
     const e = findEntity(state, ev.entityId);
     if (!e) continue;
     const c = entityCenter(state, e);
@@ -553,30 +546,6 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
     }
     ctx.globalAlpha = 1;
   }
-}
-
-/** A brief "LEVEL UP" banner near the top when a level is gained (works over the
- * fight and the cleared/defeat overlays). */
-function drawLevelUpToast(ctx: CanvasRenderingContext2D, state: GameState): void {
-  if (state.phase === "area-select") return;
-  let ev: { level: number; at: number } | undefined;
-  for (const e of state.events) if (e.kind === "level-up") ev = { level: e.level, at: e.at };
-  if (!ev) return;
-  const age = state.elapsedTime - ev.at;
-  if (age < 0 || age > 2.5) return;
-  const t = age / 2.5;
-  ctx.save();
-  ctx.globalAlpha = 1 - t * t;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = COLORS.focus;
-  ctx.font = "bold 26px system-ui, sans-serif";
-  ctx.fillText(
-    `LEVEL UP — Lv ${ev.level}  ·  +${CONFIG.progression.spPerLevel} SP`,
-    CANVAS.w / 2,
-    56 - t * 18,
-  );
-  ctx.restore();
 }
 
 function drawPanel(
@@ -869,29 +838,6 @@ function drawHub(
   ctx.font = "15px system-ui, sans-serif";
   ctx.fillText("Choose an area — clear it to unlock the next", cx, 118);
 
-  // Progression strip: level, XP-to-next bar, and unspent skill points.
-  const lvl = state.level;
-  const into = state.totalXp - xpToReachLevel(lvl);
-  const span = Math.max(1, xpToReachLevel(lvl + 1) - xpToReachLevel(lvl));
-  const bw = 260;
-  const bx = cx - bw / 2;
-  const by = 162;
-  ctx.fillStyle = COLORS.text;
-  ctx.font = "bold 14px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(
-    `Level ${lvl}${state.skillPoints > 0 ? `  ·  ${state.skillPoints} SP to spend` : ""}`,
-    cx,
-    by - 4,
-  );
-  bar(ctx, { x: bx, y: by, w: bw, h: 8 }, "#1c2029");
-  bar(ctx, { x: bx, y: by, w: bw * Math.min(1, into / span), h: 8 }, COLORS.xp);
-  ctx.fillStyle = COLORS.subtext;
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.textBaseline = "top";
-  ctx.fillText(`${state.totalXp} XP  ·  ${into}/${span} to next level`, cx, by + 12);
-
   CONFIG.areas.forEach((area, i) => {
     const r = areaCardRect(i);
     const unlocked = areaUnlocked(state, i);
@@ -984,12 +930,9 @@ function drawSkillTree(
   ctx.fillStyle = COLORS.text;
   ctx.font = "bold 22px system-ui, sans-serif";
   ctx.fillText("Skill Tree", 24, 44);
-  ctx.font = "14px system-ui, sans-serif";
-  ctx.fillStyle = COLORS.subtext;
-  ctx.fillText(`Level ${state.level}`, 156, 45);
   ctx.font = "bold 15px system-ui, sans-serif";
   ctx.fillStyle = state.skillPoints > 0 ? COLORS.cleared : COLORS.subtext;
-  ctx.fillText(`${state.skillPoints} SP available`, 232, 45);
+  ctx.fillText(`${state.skillPoints} SP available`, 156, 45);
 
   // Close button.
   const close = skillTreeCloseRect();

@@ -65,17 +65,10 @@ export const CONFIG = {
     reviveHpFraction: 0.1, // dead members revive at 10% max HP
   },
 
-  // --- XP / leveling ---
-  // Killing an enemy grants its archetype's `xp`. Each level grants `spPerLevel`
-  // skill points. `levelThresholds[L-1]` is the cumulative XP to REACH level L
-  // (index 0 = level 1 = 0 XP); past the table each further level costs the prior
-  // gap + `thresholdRamp`. Tuned so a first-try campaign yields ~50 SP (~28% of the
-  // 175-SP tree), ~2 levels/area, and the first fight (2 imps = 20 XP) hits level 2.
-  progression: {
-    spPerLevel: 5,
-    levelThresholds: [0, 20, 80, 150, 225, 310, 405, 520, 660, 810, 985],
-    thresholdRamp: 190,
-  },
+  // --- Skill points ---
+  // Killing an enemy grants its archetype's `sp` directly (no levels). Trash give
+  // 1 each; bosses scale 4/6/8/10/14 by area. A first-try campaign (42 trash + 5
+  // bosses) yields ~84 SP ≈ 25% of the 337-SP tree.
 
   // --- Enemy archetypes ---
   // Each type has a maxHp, an attack profile (only the listed attacks exist), a
@@ -94,11 +87,11 @@ export const CONFIG = {
     // tuned to stay PASSABLE for a skilled player in every area (so each area's
     // wall is its boss, not its packs); difficulty rises gently a1 -> a5, with the
     // a4/a5 line cleaves reaching the backline.
-    a1small: { name: "Imp", maxHp: 90, xp: 10, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
-    a2small: { name: "Kobold", maxHp: 95, xp: 12, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
-    a3small: { name: "Gnoll", maxHp: 95, xp: 15, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
-    a4small: { name: "Marauder", maxHp: 100, xp: 18, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
-    a5small: { name: "Reaver", maxHp: 100, xp: 22, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
+    a1small: { name: "Imp", maxHp: 90, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
+    a2small: { name: "Kobold", maxHp: 95, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
+    a3small: { name: "Gnoll", maxHp: 95, sp: 1, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
+    a4small: { name: "Marauder", maxHp: 100, sp: 1, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
+    a5small: { name: "Reaver", maxHp: 100, sp: 1, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
 
     // Boss 1 — single-target claws on the tank only. The gentle introduction; a
     // comfortable cap on area 1 that a skilled healer clears with mana to spare.
@@ -106,7 +99,7 @@ export const CONFIG = {
       name: "Ogre Brute",
       isBoss: true,
       maxHp: 480,
-      xp: 30,
+      sp: 4,
       rotation: ["claw"],
       attacks: { claw: { castTime: 2.6, damage: 15 } },
     },
@@ -117,7 +110,7 @@ export const CONFIG = {
       name: "Cleaver",
       isBoss: true,
       maxHp: 700,
-      xp: 45,
+      sp: 6,
       rotation: ["claw", "claw", "line", "claw"],
       attacks: { claw: { castTime: 2.6, damage: 17 }, line: { castTime: 3.0, damage: 11 } },
     },
@@ -129,7 +122,7 @@ export const CONFIG = {
       name: "Ogre",
       isBoss: true,
       maxHp: 1050,
-      xp: 60,
+      sp: 8,
       rotation: ["claw", "claw", "line", "claw", "claw", "aoe"],
       attacks: {
         claw: { castTime: 2.6, damage: 29 },
@@ -145,7 +138,7 @@ export const CONFIG = {
       name: "Cursed Warlord",
       isBoss: true,
       maxHp: 1050,
-      xp: 80,
+      sp: 10,
       rotation: ["claw", "cleave", "claw", "curse", "claw", "aoe"],
       attacks: {
         claw: { castTime: 2.5, damage: 16 },
@@ -161,7 +154,7 @@ export const CONFIG = {
       name: "Dread Tyrant",
       isBoss: true,
       maxHp: 1100,
-      xp: 100,
+      sp: 14,
       rotation: ["claw", "smash", "cleave", "claw", "curse", "aoe"],
       attacks: {
         claw: { castTime: 2.4, damage: 17 },

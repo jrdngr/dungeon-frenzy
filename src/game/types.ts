@@ -117,8 +117,7 @@ export interface Entity {
 export type GameEvent =
   | { kind: "damage"; entityId: string; amount: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
-  | { kind: "enrage"; entityId: string; at: number }
-  | { kind: "level-up"; level: number; at: number };
+  | { kind: "enrage"; entityId: string; at: number };
 
 /** Cumulative battle stats for one area attempt, shown on the end overlays. */
 export interface Stats {
@@ -178,9 +177,8 @@ export interface GameState {
   events: GameEvent[];
   stats: Stats;
   // --- Persistent progression (kept across runs/death like clearedAreas; reset
-  // only by createInitialState). In-memory only — no localStorage. ---
-  totalXp: number; // cumulative XP earned across all runs
-  level: number; // current level (derived from totalXp; starts at 1)
+  // only by createInitialState). In-memory only — no localStorage. Killing an enemy
+  // grants skill points directly (its archetype's `sp`); there are no levels. ---
   skillPoints: number; // unspent skill points
   skills: Record<string, number>; // node id -> ranks purchased ({ heal: 1 } at start)
   /** UI-only: the skill-tree overlay is open (only meaningful at the hub). */

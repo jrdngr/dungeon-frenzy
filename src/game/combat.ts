@@ -115,7 +115,7 @@ export function applyDamage(
   if (target.hp === 0) {
     target.alive = false;
     if (isParty(target)) state.stats.deaths += 1;
-    else state.totalXp += enemyType(target.enemyType!).xp;
+    else state.skillPoints += enemyType(target.enemyType!).sp;
   }
   return dealt;
 }

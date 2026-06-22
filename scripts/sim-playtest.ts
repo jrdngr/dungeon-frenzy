@@ -7,7 +7,7 @@
 // (healerSpells), and a build is just a `skills` record. Two ways to drive it:
 //   - fixed builds: makeBuild(sp) spends `sp` points by BUILD_PRIORITY, then we
 //     measure per-area win rate (bare start vs. a 25/50-SP build).
-//   - campaign grind: grindCampaign() plays areas in order, banking XP, buying by
+//   - campaign grind: grindCampaign() plays areas in order, banking SP, buying by
 //     priority at the hub, and retrying on defeat — the "can a player grind
 //     through, and how many attempts?" metric.
 //
@@ -26,7 +26,7 @@ import {
 } from "../src/game/engine.ts";
 import { canPurchase, healerSpells } from "../src/game/skills.ts";
 import { enemies, frontRowEnemies, livingParty } from "../src/game/combat.ts";
-import { CONFIG } from "../src/game/config.ts";
+import { CONFIG, SKILL_NODES } from "../src/game/config.ts";
 import type { ActionDef, Entity, GameState } from "../src/game/types.ts";
 import { isParty } from "../src/game/types.ts";
 
@@ -299,8 +299,8 @@ function summarize(
   );
 }
 
-// --- Campaign grind: play areas in order, banking XP and buying by priority,
-// retrying on defeat (XP/SP/skills persist). The headline progression metric. ---
+// --- Campaign grind: play areas in order, banking SP and buying by priority,
+// retrying on defeat (SP/skills persist). The headline progression metric. ---
 
 function playOnce(
   state: GameState,
@@ -330,7 +330,18 @@ function playOnce(
 interface GrindResult {
   cleared: number;
   attempts: number[];
-  finalLevel: number;
+  spSpent: number;
+}
+
+/** Total SP invested in the owned skills (sum of paid rank costs). */
+function spSpent(skills: Skills): number {
+  let spent = 0;
+  for (const id in skills) {
+    const node = SKILL_NODES.find((n) => n.id === id);
+    if (!node) continue;
+    for (let r = 0; r < skills[id]; r++) spent += node.costs[r] ?? 0;
+  }
+  return spent;
 }
 
 function grindCampaign(bot: Bot, reactionDelay: number, capPerArea = 40): GrindResult {
@@ -344,26 +355,26 @@ function grindCampaign(bot: Bot, reactionDelay: number, capPerArea = 40): GrindR
       buyBuild(state); // at the hub (area-select)
       a++;
       won = playOnce(state, bot, reactionDelay, area).win;
-      returnToHub(state); // retain XP/SP/skills; back to the hub
+      returnToHub(state); // retain SP/skills; back to the hub
     }
     attempts.push(a);
     if (won) cleared++;
     else break;
   }
-  return { cleared, attempts, finalLevel: state.level };
+  return { cleared, attempts, spSpent: spSpent(state.skills) };
 }
 
 function summarizeGrind(name: string, bot: Bot, reactionDelay: number, runs: number): void {
   let clearedSum = 0;
   let fullClears = 0;
-  let lvlSum = 0;
+  let spSum = 0;
   const attemptsSum: number[] = CONFIG.areas.map(() => 0);
   const attemptsN: number[] = CONFIG.areas.map(() => 0);
   for (let i = 0; i < runs; i++) {
     const r = grindCampaign(bot, reactionDelay);
     clearedSum += r.cleared;
     if (r.cleared === CONFIG.areas.length) fullClears++;
-    lvlSum += r.finalLevel;
+    spSum += r.spSpent;
     r.attempts.forEach((a, idx) => {
       attemptsSum[idx] += a;
       attemptsN[idx]++;
@@ -374,7 +385,7 @@ function summarizeGrind(name: string, bot: Bot, reactionDelay: number, runs: num
     `${name.padEnd(12)} full-clear ${((fullClears / runs) * 100).toFixed(0).padStart(3)}%  ` +
       `areas ${(clearedSum / runs).toFixed(1)}/5  ` +
       `attempts/area [${avgAttempts.join(", ")}]  ` +
-      `finalLv ${(lvlSum / runs).toFixed(1)}`,
+      `SP spent ${(spSum / runs).toFixed(0)}`,
   );
 }
 
@@ -436,20 +447,20 @@ if (process.argv[2] === "debug") {
   process.exit(0);
 }
 
-const build25 = makeBuild(25);
-const build50 = makeBuild(50);
+const build40 = makeBuild(40); // ~halfway through a campaign
+const build84 = makeBuild(84); // a full first-try campaign's worth
 console.log(
-  `builds: bare=1 node · @25sp=${Object.keys(build25).length} nodes · @50sp=${Object.keys(build50).length} nodes`,
+  `builds: bare=1 node · @40sp=${Object.keys(build40).length} nodes · @84sp=${Object.keys(build84).length} nodes`,
 );
 
 console.log("\n== per-area win rate by build (smart bot, 0.3s reaction) ==");
 for (let a = 0; a < CONFIG.areas.length; a++) summarize(`area ${a + 1} bare`, smartBot, 0.3, a, BARE);
 console.log("");
-for (let a = 0; a < CONFIG.areas.length; a++) summarize(`area ${a + 1} @25sp`, smartBot, 0.3, a, build25);
+for (let a = 0; a < CONFIG.areas.length; a++) summarize(`area ${a + 1} @40sp`, smartBot, 0.3, a, build40);
 console.log("");
-for (let a = 0; a < CONFIG.areas.length; a++) summarize(`area ${a + 1} @50sp`, smartBot, 0.3, a, build50);
+for (let a = 0; a < CONFIG.areas.length; a++) summarize(`area ${a + 1} @84sp`, smartBot, 0.3, a, build84);
 
-console.log("\n== campaign grind (buy by priority, retry on loss, XP retained) ==");
+console.log("\n== campaign grind (buy by priority, retry on loss, SP retained) ==");
 summarizeGrind("smart 0.3", smartBot, 0.3, 40);
 summarizeGrind("smart 1.0", smartBot, 1.0, 40);
 summarizeGrind("sloppy 0.4", sloppyBot, 0.4, 40);

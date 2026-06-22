@@ -23,7 +23,6 @@ import {
   effectiveHealer,
   effectiveParty,
   effectiveRecovery,
-  levelForXp,
   nextNodeCost,
   partyAbilities,
 } from "./skills";
@@ -58,8 +57,6 @@ export function createInitialState(): GameState {
     elapsedTime: 0,
     events: [],
     stats: emptyStats(),
-    totalXp: 0,
-    level: 1,
     skillPoints: 0,
     skills: { heal: 1 }, // the center Heal spell starts owned/free
     skillTreeOpen: false,
@@ -185,23 +182,13 @@ export function advanceFight(state: GameState): void {
 }
 
 /** Return to the area-select hub (from an end overlay), keeping cleared progress.
- * Progression (totalXp/level/skillPoints/skills) persists — it is never reset here. */
+ * Progression (skillPoints/skills) persists — it is never reset here. */
 export function returnToHub(state: GameState): void {
   state.phase = "area-select";
   state.entities = [];
   state.armedSpellId = undefined;
   state.focusedEnemyId = undefined;
   state.events = [];
-}
-
-/** Award skill points for any levels reached from XP banked this update. */
-function reconcileLevel(state: GameState): void {
-  const target = levelForXp(state.totalXp);
-  while (state.level < target) {
-    state.level += 1;
-    state.skillPoints += CONFIG.progression.spPerLevel;
-    state.events.push({ kind: "level-up", level: state.level, at: state.elapsedTime });
-  }
 }
 
 /** Spend a skill point on the next rank of a node (hub only). Returns whether it
@@ -553,9 +540,6 @@ export function update(state: GameState, dt: number): void {
   if (livingParty(state).length > 0) {
     for (const e of enemies(state)) if (!e.current) startEnemyAction(state, e);
   }
-
-  // 2c. Award levels / skill points for any XP banked this frame.
-  reconcileLevel(state);
 
   // 3. Per-enemy enrage when an enemy drops below its threshold.
   for (const e of enemies(state)) {
