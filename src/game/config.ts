@@ -14,8 +14,14 @@
 //   only the frontmost living row is targetable — back-row enemies (e.g. a shielded
 //   boss) can't be hit until the front row is cleared, though they still attack.
 //
-// Numbers here are a starting point; the curve is validated/retuned with
-// scripts/sim-playtest.ts (areas 1-2 easy, area 3 ~= the old single fight, 4-5 hard).
+// The difficulty curve is validated/retuned with scripts/sim-playtest.ts (a
+// skilled "smart" bot, 200 runs/area). Target curve, base kit (no skill tree yet):
+//   area 1  comfortable        (~100% win, no deaths, never OOM)
+//   area 2  a clear step up     (beatable but punishing: deaths + early OOM)
+//   area 3  the HARD WALL       (~0% win; wipes on the boss with it still ~2/3 HP)
+//   areas 4-5  harder walls     (~0% win; barely/never dent the boss)
+// Each area's wall is its BOSS — the small packs stay passable for a skilled
+// player. Area 3+ is meant to be cleared only once the (future) skill tree lands.
 
 export const CONFIG = {
   // --- Party damage dealers (AI auto-attackers; the player can't control them) ---
@@ -68,53 +74,61 @@ export const CONFIG = {
   //   curse  hostile damage-over-time on a backline member          [dot]
   enemyTypes: {
     // Small enemies — die fast; pressure comes from their numbers. They mirror the
-    // area boss's base attacks (claw, later light line). Never enrage.
-    // Imps hit hard (12, doubled from 6) and are tanky (120 HP, doubled): area 1's
-    // first two fights are a sharp opener. a1small is only used in those two fights.
-    a1small: { name: "Imp", maxHp: 120, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 12 } } },
-    a2small: { name: "Kobold", maxHp: 75, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 7 } } },
-    a3small: { name: "Gnoll", maxHp: 90, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 8 } } },
-    a4small: { name: "Marauder", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 9 }, line: { castTime: 3.2, damage: 6 } } },
-    a5small: { name: "Reaver", maxHp: 115, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 10 }, line: { castTime: 3.0, damage: 6 } } },
+    // area boss's base attacks (claw, later light line). Never enrage. Trash is
+    // tuned to stay PASSABLE for a skilled player in every area (so each area's
+    // wall is its boss, not its packs); difficulty rises gently a1 -> a5, with the
+    // a4/a5 line cleaves reaching the backline.
+    a1small: { name: "Imp", maxHp: 90, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
+    a2small: { name: "Kobold", maxHp: 95, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
+    a3small: { name: "Gnoll", maxHp: 95, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
+    a4small: { name: "Marauder", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
+    a5small: { name: "Reaver", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
 
-    // Boss 1 — single-target claws on the tank only. The gentle introduction.
+    // Boss 1 — single-target claws on the tank only. The gentle introduction; a
+    // comfortable cap on area 1 that a skilled healer clears with mana to spare.
     boss1: {
       name: "Ogre Brute",
       isBoss: true,
-      maxHp: 520,
+      maxHp: 480,
       rotation: ["claw"],
-      attacks: { claw: { castTime: 2.6, damage: 16 } },
+      attacks: { claw: { castTime: 2.6, damage: 15 } },
     },
     // Boss 2 — claws + a Cleave (tank + one random other; first hits on the backline).
+    // Area 2's capstone: a clear step up from area 1 but still beatable by a
+    // skilled, mana-disciplined healer.
     boss2: {
       name: "Cleaver",
       isBoss: true,
-      maxHp: 800,
+      maxHp: 700,
       rotation: ["claw", "claw", "line", "claw"],
-      attacks: { claw: { castTime: 2.6, damage: 19 }, line: { castTime: 3.0, damage: 12 } },
+      attacks: { claw: { castTime: 2.6, damage: 17 }, line: { castTime: 3.0, damage: 11 } },
     },
-    // Boss 3 — the original Ogre fight (claw + line + AoE), now area 3's finale.
+    // Boss 3 — the original Ogre fight (claw + line + AoE), now area 3's finale and
+    // the campaign's HARD WALL: with the base kit a skilled player clears the trash,
+    // reaches the boss, but wipes with it still well above half HP. Beating it is
+    // gated behind the (future) skill tree.
     boss3: {
       name: "Ogre",
       isBoss: true,
-      maxHp: 980,
+      maxHp: 1050,
       rotation: ["claw", "claw", "line", "claw", "claw", "aoe"],
       attacks: {
-        claw: { castTime: 2.6, damage: 27 },
-        line: { castTime: 3.0, damage: 13 },
-        aoe: { castTime: 3.5, damage: 11 },
+        claw: { castTime: 2.6, damage: 29 },
+        line: { castTime: 3.0, damage: 14 },
+        aoe: { castTime: 3.5, damage: 13 },
       },
       enrage: { hpFraction: 0.15, damageScale: 1.35, castScale: 0.78 },
     },
     // Boss 4 — adds Curse (hostile DoT) + Wide Cleave (3 targets). Fights from the
-    // BACK row, shielded by front-row adds you must clear first.
+    // BACK row, shielded by front-row adds you must clear first. A harder wall than
+    // boss3: the party reaches it but dents it less before wiping.
     boss4: {
       name: "Cursed Warlord",
       isBoss: true,
-      maxHp: 950,
+      maxHp: 1050,
       rotation: ["claw", "cleave", "claw", "curse", "claw", "aoe"],
       attacks: {
-        claw: { castTime: 2.5, damage: 18 },
+        claw: { castTime: 2.5, damage: 16 },
         cleave: { castTime: 3.2, damage: 10 },
         curse: { castTime: 2.4, perTick: 4, interval: 1.0, duration: 6.0 },
         aoe: { castTime: 3.5, damage: 9 },
@@ -122,11 +136,11 @@ export const CONFIG = {
       enrage: { hpFraction: 0.15, damageScale: 1.35, castScale: 0.8 },
     },
     // Boss 5 — everything: Curse + Heavy Smash (big tank nuke) + Wide Cleave. Also
-    // back-row, behind tougher adds.
+    // back-row, behind tougher adds. The campaign's hardest wall.
     boss5: {
       name: "Dread Tyrant",
       isBoss: true,
-      maxHp: 980,
+      maxHp: 1100,
       rotation: ["claw", "smash", "cleave", "claw", "curse", "aoe"],
       attacks: {
         claw: { castTime: 2.4, damage: 17 },

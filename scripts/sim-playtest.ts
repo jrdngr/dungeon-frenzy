@@ -108,6 +108,9 @@ interface RunResult {
   starvation: number | null;
   enrage: number | null;
   healerDmg: number;
+  // Lowest HP% any boss was pushed to this run (0 = killed; null = never
+  // reached a boss). The key "hard wall vs near-miss" signal for 0%-win areas.
+  bossMinHp: number | null;
 }
 
 function runArea(bot: Bot, reactionDelay: number, areaIndex: number): RunResult {
@@ -119,6 +122,7 @@ function runArea(bot: Bot, reactionDelay: number, areaIndex: number): RunResult 
   let starvation: number | null = null;
   let enrage: number | null = null;
   let healerDmg = 0;
+  let bossMinHp: number | null = null;
 
   while (state.elapsedTime < 1200) {
     if (state.phase === "fight-cleared") {
@@ -141,6 +145,12 @@ function runArea(bot: Bot, reactionDelay: number, areaIndex: number): RunResult 
     if (enrage === null && enemies(state).some((e) => e.enraged)) {
       enrage = state.elapsedTime;
     }
+    for (const e of state.entities) {
+      if (e.enemyType?.startsWith("boss")) {
+        const frac = (e.hp / e.maxHp) * 100;
+        if (bossMinHp === null || frac < bossMinHp) bossMinHp = frac;
+      }
+    }
     for (const ev of state.events) {
       if (ev.at > lastScan && ev.kind === "damage" && ev.entityId === "healer") {
         healerDmg += ev.amount;
@@ -159,6 +169,7 @@ function runArea(bot: Bot, reactionDelay: number, areaIndex: number): RunResult 
     starvation,
     enrage,
     healerDmg,
+    bossMinHp,
   };
 }
 
@@ -173,6 +184,8 @@ function summarize(name: string, bot: Bot, reactionDelay: number, areaIndex: num
   let starvN = 0;
   const fightFail: number[] = [0, 0, 0];
   let healerDmg = 0;
+  let bossSum = 0;
+  let bossN = 0;
   for (let i = 0; i < runs; i++) {
     const r = runArea(bot, reactionDelay, areaIndex);
     if (r.outcome === "win") {
@@ -190,14 +203,24 @@ function summarize(name: string, bot: Bot, reactionDelay: number, areaIndex: num
       starvSum += r.starvation;
       starvN++;
     }
+    // On a defeat, how low did we ever push the boss? (Skip wins, where the
+    // boss is killed and 0% would just drag the wall-depth average down.)
+    if (r.outcome === "defeat" && r.bossMinHp !== null) {
+      bossSum += r.bossMinHp;
+      bossN++;
+    }
   }
   const avgTime = wins ? (totalTime / wins).toFixed(0) : "-";
   const avgStarv = starvN ? (starvSum / starvN).toFixed(0) : "-";
+  // Lowest boss HP% reached on losing runs: high = hard wall, low = near-miss,
+  // "-" = never even reached the boss (walled on the trash).
+  const avgBoss = bossN ? `${(bossSum / bossN).toFixed(0)}%` : "-";
   console.log(
     `${name.padEnd(22)} win ${((wins / runs) * 100).toFixed(0).padStart(3)}%  ` +
       `time ${String(avgTime).padStart(4)}s  deaths ${(totalDeaths / runs).toFixed(2)}  ` +
       `OOM@${String(avgStarv).padStart(3)}s  ` +
       `failF ${fightFail.map((n) => (n / runs).toFixed(2)).join("/")}  ` +
+      `boss▼${avgBoss.padStart(4)}  ` +
       `hDmg ${(healerDmg / runs).toFixed(0)}` +
       (timeouts ? `  TIMEOUTS ${timeouts}` : ""),
   );
