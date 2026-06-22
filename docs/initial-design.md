@@ -282,7 +282,7 @@ default, so clicking it taught nothing. Now it *is* the default:
   it stops time, because the player selected it to choose an override — the
   same decision moment as selecting a truly idle unit.
 
-## Iteration 7 (current scope): cut back to a pure healing game
+## Iteration 7 (done): cut back to a pure healing game
 
 Iterations 1–6 grew the game into a busy party-manager (movement, fighter kits,
 auto-attacks, tactical pause). To find the fun before re-expanding, Iteration 7
@@ -365,6 +365,56 @@ members; a Fast-Heal spammer and an AFK party lose 100%. Starvation (~35s)
 reliably precedes enrage (~62s). Knobs in `config.ts`: `manaRegen` and spell
 mana costs (difficulty), enemy `claw` damage (tank pressure), `enrage.hpFraction`
 (finale timing).
+
+## Iteration 8 (current scope): a campaign of areas, multiple enemies
+
+Iteration 7 found the fun in a single fight. Iteration 8 re-expands it into a
+**campaign** without losing the mana-starvation core — the resource economy now
+spans a whole area instead of one fight. (This also lays the groundwork for a
+later **XP + skill-tree** system; the area-select screen becomes the hub.)
+
+### Structure
+
+- **5 areas** of fixed, rising difficulty, played from an **area-select hub**.
+  Areas unlock **sequentially** (clear one to open the next); a **defeat returns
+  you to the hub** to retry. Cleared progress is in-memory only.
+- **Each area is 3 fights:** fight 1 = a small pack, fight 2 = a bigger pack,
+  fight 3 = a **boss**. **HP and MP carry across the 3 fights.** Between fights
+  everyone restores **+10% max HP/MP** and **dead members revive at 10% max HP**
+  (`CONFIG.recovery`); time is frozen during the "fight cleared" interstitial.
+
+### Multiple enemies & front/back rows
+
+- Enemies fight in **rows**. The party **focus-fires one enemy** at a time; the
+  player picks it by **clicking a front-row enemy** (sticky until it dies, then it
+  auto-advances). **Only the frontmost living row is targetable** — back-row
+  enemies (e.g. a shielded boss) can't be hit until the front row is cleared, but
+  they keep attacking. Each enemy runs its own rotation/timers.
+- **Enemy targeting:** single-target Claw/Heavy Smash pile on the **tank**;
+  Line/Cleave hit a primary + random others; AoE hits all; **Curse** is a hostile
+  DoT thrown at the squishy backline. With several enemies the tank is the heavy
+  heal sink.
+
+### Bosses & new mechanics
+
+- **B1** claw-only (tank); **B2** claw + Cleave; **B3 = the old Ogre** (claw +
+  Cleave + AoE), area 3's finale. **B4 & B5** add new, telegraphed mechanics:
+  **Curse** (hostile DoT — out-heal a ticking debuff; reuses the HoT machinery,
+  inverted), **Heavy Smash** (a big slow nuke on the tank to pre-heal), and **Wide
+  Cleave** (a 3-target line). B4 = Curse + Wide Cleave; B5 = all three. Bosses 4–5
+  fight from the **back row** behind front-row adds you must clear first.
+- **Enrage** (<15% HP frenzy: damage ×~1.35, cast ×~0.8) is a boss signature on
+  **B3–B5 only**; small enemies never enrage.
+
+### Balance evidence
+
+`scripts/sim-playtest.ts` now drives the healer (and its focus target) through
+**whole areas** (carry-over + recovery). A mana-conscious triager wins areas 1–4
+~100% with rising pressure (OOM creeps from "never" in area 1 to ~60s in area 4)
+and area 5 ~50% — a beatable climax with headroom for sharper play; Fast-Heal
+spam and AFK lose 100% everywhere (no infinite sustain). Knobs in `config.ts`:
+per-archetype `maxHp`/damage, per-fight enemy counts (`areas`), `manaRegen` and
+spell costs (campaign economy), `recovery` (between-fight slack).
 
 ## Tech
 

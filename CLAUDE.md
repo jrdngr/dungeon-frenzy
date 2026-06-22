@@ -1,11 +1,15 @@
 # Dungeon Frenzy
 
 A real-time **healing game**: you play the party's healer, keeping a fixed,
-auto-fighting party (tank + ranger + mage + you) alive against one enemy by
-juggling four timed, mana-costed, cooldown-gated heals. Everything is immobile;
-the hex grid is now visual layout only. Built with TypeScript + HTML5 Canvas +
-Vite. See `docs/initial-design.md` for the vision and per-iteration scope (the
-game was cut back to this healing core in Iteration 7).
+auto-fighting party (tank + ranger + mage + you) alive by juggling four timed,
+mana-costed, cooldown-gated heals. Iteration 8 grew it into a **campaign**: a hub
+of **5 areas**, each **3 fights** (small pack → bigger pack → boss) where HP/MP
+carry across the fights of an area. Enemies fight in **front/back rows** — the
+party focus-fires one front-row enemy (click it; back-row enemies are shielded
+until the front row dies). Everything is immobile; the hex grid is visual layout
+only. Built with TypeScript + HTML5 Canvas + Vite. See `docs/initial-design.md`
+for the vision and per-iteration scope (the game was cut back to a single-fight
+healing core in Iteration 7, then re-expanded into the campaign in Iteration 8).
 
 ## Running
 
@@ -22,12 +26,15 @@ index.html               Entry HTML; hosts the <canvas> and loads src/main.ts.
 src/main.ts              Wires up the canvas and runs the requestAnimationFrame loop.
 src/style.css            Page styling.
 src/game/                Pure simulation — NO canvas/DOM imports here.
-  config.ts              ALL tunable balance constants (HP, damage, cast times, AI).
+  config.ts              ALL tunable balance: party/healer stats, enemy archetypes,
+                         and the 5 areas x 3 fights of enemy placements.
   types.ts               Core data model (Entity, ActionDef, GameState, ...).
   hex.ts                 Axial hex coordinates + hex->pixel layout.
-  actions.ts             Static action definitions, built from config.ts.
-  combat.ts              Pure effect resolution (damage, heal, HoT ticks).
-  engine.ts              createInitialState() + update(state, dt): the simulation.
+  actions.ts             Static action defs + the enemy-archetype attack registry.
+  combat.ts              Pure effect resolution (damage, heal, HoT/DoT ticks) +
+                         enemy/focus/front-row helpers.
+  engine.ts              createInitialState/startArea/advanceFight + update(): the
+                         simulation, including the area -> fight progression.
 src/ui/                  Rendering + input — all canvas/DOM lives here.
   layout.ts              Screen geometry (entity positions, bars, buttons) + hit-testing.
   render.ts              Draws everything from GameState; never mutates it.
