@@ -14,7 +14,7 @@ import {
   setFocus,
   startArea,
 } from "../game/engine";
-import { HEALER_ACTIONS } from "../game/actions";
+import { healerSpells } from "../game/skills";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
@@ -27,8 +27,8 @@ import {
   quitButtonRect,
 } from "./layout";
 
-/** Ability hotkeys, left-to-right onto the healer's four spells (Q W E R). */
-export const ABILITY_KEYS = ["q", "w", "e", "r"];
+/** Ability hotkeys, left-to-right onto the healer's spells (up to 5: Q W E R T). */
+export const ABILITY_KEYS = ["q", "w", "e", "r", "t"];
 
 const ROLE_ORDER: Record<string, number> = {
   tank: 0,
@@ -100,8 +100,8 @@ export function handleClick(state: GameState, p: Point): void {
     return;
   }
 
-  // 1. Spell buttons (always the healer's four heals).
-  for (const b of actionButtons()) {
+  // 1. Spell buttons (the healer's unlocked heals, dynamic count).
+  for (const b of actionButtons(state)) {
     if (pointInRect(p, b.rect)) {
       onSpellButton(state, b.def);
       return;
@@ -117,11 +117,14 @@ export function handleClick(state: GameState, p: Point): void {
     }
   }
 
-  // 3. Clicking an entity token: cast on an ally, or focus a front-row enemy.
-  const clicked = state.entities.find((e) => e.alive && pointInToken(state, p, e));
+  // 3. Clicking an entity token: cast on an ally (incl. a dead one, for Resurrect),
+  // or focus a living front-row enemy.
+  const clicked = state.entities.find(
+    (e) => pointInToken(state, p, e) && (e.alive || isParty(e)),
+  );
   if (clicked) {
     if (isParty(clicked)) castOnTarget(state, clicked);
-    else if (clicked.kind === "enemy") setFocus(state, clicked.id); // front-row only
+    else setFocus(state, clicked.id); // front-row only (validated in setFocus)
   }
 }
 
@@ -163,19 +166,22 @@ export function handleKey(state: GameState, rawKey: string): void {
   // Ability keys arm the healer's spells, left to right.
   const idx = ABILITY_KEYS.indexOf(key);
   if (idx >= 0) {
-    const def = HEALER_ACTIONS[idx];
+    const def = healerSpells(state.skills)[idx];
     if (def) onSpellButton(state, def);
   }
 }
 
 /** Cast the armed spell on `ally` (replacing any cast in progress). The spell
- * stays armed afterward so you can keep clicking targets. */
+ * stays armed afterward so you can keep clicking targets. Resurrect (ally-dead)
+ * needs a dead target; every other heal needs a living one. */
 function castOnTarget(state: GameState, ally: Entity): void {
-  if (!ally.alive || !isParty(ally)) return;
+  if (!isParty(ally)) return;
   const h = healerOf(state);
   if (!h || !h.alive || !state.armedSpellId) return;
-  const def = HEALER_ACTIONS.find((a) => a.id === state.armedSpellId);
-  if (def) issueOrder(state, h.id, def, ally.id);
+  const def = healerSpells(state.skills).find((a) => a.id === state.armedSpellId);
+  if (!def) return;
+  if (def.targeting === "ally-dead" ? ally.alive : !ally.alive) return;
+  issueOrder(state, h.id, def, ally.id);
 }
 
 function onSpellButton(state: GameState, def: ActionDef): void {

@@ -2,7 +2,8 @@
 // canvas. Kept separate from drawing so input hit-testing and rendering agree.
 
 import { hexToPixel, type Point } from "../game/hex";
-import { HEALER_ACTIONS, isBossType } from "../game/actions";
+import { isBossType } from "../game/actions";
+import { healerSpells } from "../game/skills";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState, Hex } from "../game/types";
 
@@ -96,14 +97,20 @@ export interface ActionButton {
   rect: Rect;
 }
 
-/** Lay out the healer's spell buttons inside the panel. */
-export function actionButtons(): ActionButton[] {
-  const defs = HEALER_ACTIONS;
-  const btnW = 164;
-  const btnH = 64;
+/** Lay out the healer's (dynamic 1-5) spell buttons inside the panel. Button width
+ * shrinks with the count and the row is centered in the space left of the Quit
+ * button so a full 5-spell bar never collides with it. */
+export function actionButtons(state: GameState): ActionButton[] {
+  const defs = healerSpells(state.skills);
+  const count = defs.length;
   const gap = 14;
-  const totalW = defs.length * btnW + (defs.length - 1) * gap;
-  const startX = PANEL.x + (PANEL.w - totalW) / 2;
+  const btnH = 64;
+  const leftX = 14;
+  const rightX = quitButtonRect().x - 14; // keep clear of the Quit button
+  const avail = rightX - leftX;
+  const btnW = Math.min(164, (avail - (count - 1) * gap) / count);
+  const totalW = count * btnW + (count - 1) * gap;
+  const startX = leftX + (avail - totalW) / 2;
   const y = PANEL.y + (PANEL.h - btnH) / 2 + 8;
   return defs.map((def, i) => ({
     def,

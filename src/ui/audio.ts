@@ -58,10 +58,11 @@ function beep(
 
 /** Per-spell completion pitch so the ear can tell which heal just landed. */
 const SPELL_PITCHES: Record<string, number> = {
-  "fast-heal": 660,
-  "slow-heal": 540,
-  renew: 760,
-  "aoe-heal": 900,
+  heal: 540,
+  "quick-heal": 660,
+  regen: 760,
+  "group-heal": 900,
+  resurrect: 480,
 };
 
 /** Call once per frame after update(). Diffs against the previous frame and

@@ -7,6 +7,7 @@ import {
   frontRowEnemies,
 } from "../game/combat";
 import { enemyType, isBossType } from "../game/actions";
+import { xpToReachLevel } from "../game/skills";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
@@ -48,6 +49,9 @@ const COLORS = {
   smash: "#ff5a4d",
   hot: "#5bc98a",
   mana: "#5aa9e8",
+  shield: "#5ad6d0",
+  thorns: "#e0795a",
+  xp: "#d7c08a",
   threat: "#e05a5c",
   armed: "#d7c08a",
   target: "#d7c08a",
@@ -85,8 +89,9 @@ export function render(
   drawPanel(ctx, state, mouse);
   drawStatusBar(ctx, state);
 
-  if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, mouse);
+  if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, state, mouse);
   if (state.phase !== "playing") drawOverlay(ctx, state);
+  drawLevelUpToast(ctx, state);
 }
 
 function tracePath(ctx: CanvasRenderingContext2D, pts: Point[]): void {
@@ -188,6 +193,10 @@ function drawTelegraphs(ctx: CanvasRenderingContext2D, state: GameState): void {
 
 function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
   const armed = !!state.armedSpellId;
+  const armedDef = state.armedSpellId
+    ? actionButtons(state).find((b) => b.def.id === state.armedSpellId)?.def
+    : undefined;
+  const reviveArmed = armedDef?.targeting === "ally-dead";
   const slots = partySlots(state);
   const front = new Set(frontRowEnemies(state).map((e) => e.id));
   const focus = focusedEnemy(state);
@@ -202,9 +211,16 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
     if (!e.alive) ctx.globalAlpha = 0.32; // corpse
     else if (backRow) ctx.globalAlpha = 0.55; // shielded back row
 
-    // Target/focus affordances.
-    if (armed && isParty(e) && e.alive) {
-      ring(ctx, c.x, c.y, radius + 5, COLORS.target, 2);
+    // Target/focus affordances (Resurrect targets DEAD allies instead of living).
+    if (armed && isParty(e)) {
+      if (reviveArmed && !e.alive) {
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ring(ctx, c.x, c.y, radius + 5, COLORS.healer, 2);
+        ctx.restore();
+      } else if (!reviveArmed && e.alive) {
+        ring(ctx, c.x, c.y, radius + 5, COLORS.target, 2);
+      }
     }
     if (e.kind === "enemy" && e.alive) {
       if (focus && focus.id === e.id) ring(ctx, c.x, c.y, radius + 5, COLORS.focus, 3);
@@ -242,6 +258,7 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
 
     if (e.alive) {
       drawHpBar(ctx, state, e);
+      drawBuffs(ctx, state, e);
       if (e.maxMana > 0) drawManaBar(ctx, state, e);
       if (e.kind === "enemy" && isBossType(e.enemyType)) drawRotationIndicator(ctx, state, e);
       // The healer's cast progress is shown in the bottom panel instead (drawHealerCastBar).
@@ -381,6 +398,39 @@ function drawCurseMark(ctx: CanvasRenderingContext2D, state: GameState, e: Entit
   ctx.fillText("☠", r.x - 3, r.y + r.h / 2);
 }
 
+/** Skill-tree buffs on a party member: a cyan ring for a hit-block shield (with a
+ * charge count), a cyan strip above the HP bar for an Overheal absorb pool, and a
+ * dashed orange ring while Thorns is active. */
+function drawBuffs(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
+  const c = entityCenter(state, e);
+  const radius = entityRadius(e);
+
+  if (e.thorns && e.thorns.remaining > 0) {
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ring(ctx, c.x, c.y, radius + 8, COLORS.thorns, 1.5);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  if (e.shield) {
+    if (e.shield.hits > 0) {
+      ring(ctx, c.x, c.y, radius + 3, COLORS.shield, 2.5);
+      if (e.shield.hits > 1) {
+        ctx.fillStyle = COLORS.shield;
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(e.shield.hits), c.x + radius - 1, c.y - radius + 1);
+      }
+    }
+    if (e.shield.absorb > 0 && e.shield.absorbCap > 0) {
+      const hp = hpBarRect(state, e);
+      bar(ctx, { x: hp.x, y: hp.y - 4, w: hp.w * Math.min(1, e.shield.absorb / e.shield.absorbCap), h: 3 }, COLORS.shield);
+    }
+  }
+}
+
 /** Pips above a boss's HP bar showing its attack rotation. */
 function drawRotationIndicator(ctx: CanvasRenderingContext2D, state: GameState, e: Entity): void {
   const rotation = enemyType(e.enemyType!).rotation;
@@ -494,6 +544,30 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
   }
 }
 
+/** A brief "LEVEL UP" banner near the top when a level is gained (works over the
+ * fight and the cleared/defeat overlays). */
+function drawLevelUpToast(ctx: CanvasRenderingContext2D, state: GameState): void {
+  if (state.phase === "area-select") return;
+  let ev: { level: number; at: number } | undefined;
+  for (const e of state.events) if (e.kind === "level-up") ev = { level: e.level, at: e.at };
+  if (!ev) return;
+  const age = state.elapsedTime - ev.at;
+  if (age < 0 || age > 2.5) return;
+  const t = age / 2.5;
+  ctx.save();
+  ctx.globalAlpha = 1 - t * t;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.focus;
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.fillText(
+    `LEVEL UP — Lv ${ev.level}  ·  +${CONFIG.progression.spPerLevel} SP`,
+    CANVAS.w / 2,
+    56 - t * 18,
+  );
+  ctx.restore();
+}
+
 function drawPanel(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -520,22 +594,24 @@ function drawPanel(
     bar(ctx, { ...mb, w: mb.w * (h.mana / h.maxMana) }, COLORS.mana);
   }
 
-  const armedDef = state.armedSpellId ? HEALER_SPELL(state.armedSpellId) : undefined;
+  const armedDef = state.armedSpellId ? HEALER_SPELL(state, state.armedSpellId) : undefined;
   ctx.fillStyle = armedDef ? COLORS.armed : COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillText(
     armedDef
-      ? `${armedDef.name} armed — click an ally (or press 1-4) to cast`
-      : "Pick a spell (Q W E R or click), then click an ally to heal · click an enemy to focus-fire",
+      ? armedDef.targeting === "ally-dead"
+        ? `${armedDef.name} armed — click a fallen ally (or press its number) to revive`
+        : `${armedDef.name} armed — click an ally (or press its number) to cast`
+      : "Pick a spell (hotkey or click), then click an ally to heal · click an enemy to focus-fire",
     PANEL.x + PANEL.w / 2,
     PANEL.y + 10,
   );
 
   drawHealerCastBar(ctx, state);
 
-  actionButtons().forEach((b, i) => {
+  actionButtons(state).forEach((b, i) => {
     const armed = state.armedSpellId === b.def.id;
     const hotkey = ABILITY_KEYS[i]?.toUpperCase();
     const total = b.def.cooldown ?? 0;
@@ -603,8 +679,8 @@ function drawQuitButton(ctx: CanvasRenderingContext2D, mouse: Point | null): voi
   ctx.fillText("back to map", r.x + r.w / 2, r.y + r.h / 2 + 9);
 }
 
-function HEALER_SPELL(id: string): ActionDef | undefined {
-  return actionButtons().find((b) => b.def.id === id)?.def;
+function HEALER_SPELL(state: GameState, id: string): ActionDef | undefined {
+  return actionButtons(state).find((b) => b.def.id === id)?.def;
 }
 
 function healAmount(def: ActionDef): number {
@@ -615,28 +691,39 @@ function healAmount(def: ActionDef): number {
 }
 
 function buttonSub(def: ActionDef): string {
-  let heal = `+${healAmount(def)}`;
-  if (def.effect.kind === "aoe-heal") heal += " all";
-  const parts = [heal];
+  const e = def.effect;
+  let main: string;
+  if (e.kind === "revive") main = `revive ${Math.round(e.hpFraction * 100)}%`;
+  else {
+    main = `+${healAmount(def)}`;
+    if (e.kind === "aoe-heal") main += " all";
+  }
+  const parts = [main];
   if (def.manaCost !== undefined) parts.push(`${def.manaCost} mp`);
   return parts.join(" · ");
 }
 
-function drawSpellTooltip(ctx: CanvasRenderingContext2D, mouse: Point): void {
-  const hovered = actionButtons().find((b) => pointInRect(mouse, b.rect));
+function drawSpellTooltip(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point,
+): void {
+  const hovered = actionButtons(state).find((b) => pointInRect(mouse, b.rect));
   if (!hovered) return;
   const def = hovered.def;
   const e = def.effect;
 
   const heal = healAmount(def);
   const healText =
-    e.kind === "aoe-heal"
-      ? `${heal} to all`
-      : e.kind === "hot"
-        ? `${heal} over ${e.duration.toFixed(0)}s`
-        : `${heal}`;
+    e.kind === "revive"
+      ? `${Math.round(e.hpFraction * 100)}% max HP`
+      : e.kind === "aoe-heal"
+        ? `${heal} to all`
+        : e.kind === "hot"
+          ? `${heal} over ${e.duration.toFixed(0)}s`
+          : `${heal}`;
   const rows: Array<[string, string]> = [
-    ["Heals", healText],
+    [e.kind === "revive" ? "Revives" : "Heals", healText],
     ["Cast time", `${def.castTime.toFixed(1)}s`],
     ["Cooldown", def.cooldown ? `${def.cooldown.toFixed(1)}s` : "none"],
     ["Mana", def.manaCost !== undefined ? `${def.manaCost}` : "free"],
@@ -689,7 +776,7 @@ function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
 
   ctx.textAlign = "right";
   ctx.fillText(
-    "Q W E R / click spell · 1-4 / click ally to cast · click enemy to focus · X stop · Esc clear · M mute",
+    "hotkey/click spell · number/click ally to cast · click enemy to focus · X stop · Esc clear · M mute",
     CANVAS.w - 12,
     12,
   );
@@ -769,7 +856,30 @@ function drawHub(
   ctx.fillText("Dungeon Frenzy", cx, 80);
   ctx.fillStyle = COLORS.subtext;
   ctx.font = "15px system-ui, sans-serif";
-  ctx.fillText("Choose an area — clear it to unlock the next", cx, 120);
+  ctx.fillText("Choose an area — clear it to unlock the next", cx, 118);
+
+  // Progression strip: level, XP-to-next bar, and unspent skill points.
+  const lvl = state.level;
+  const into = state.totalXp - xpToReachLevel(lvl);
+  const span = Math.max(1, xpToReachLevel(lvl + 1) - xpToReachLevel(lvl));
+  const bw = 260;
+  const bx = cx - bw / 2;
+  const by = 162;
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(
+    `Level ${lvl}${state.skillPoints > 0 ? `  ·  ${state.skillPoints} SP to spend` : ""}`,
+    cx,
+    by - 4,
+  );
+  bar(ctx, { x: bx, y: by, w: bw, h: 8 }, "#1c2029");
+  bar(ctx, { x: bx, y: by, w: bw * Math.min(1, into / span), h: 8 }, COLORS.xp);
+  ctx.fillStyle = COLORS.subtext;
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textBaseline = "top";
+  ctx.fillText(`${state.totalXp} XP  ·  ${into}/${span} to next level`, cx, by + 12);
 
   CONFIG.areas.forEach((area, i) => {
     const r = areaCardRect(i);
