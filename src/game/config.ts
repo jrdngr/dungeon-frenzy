@@ -21,7 +21,9 @@
 //   area 3  the HARD WALL       (~0% win; wipes on the boss with it still ~2/3 HP)
 //   areas 4-5  harder walls     (~0% win; barely/never dent the boss)
 // Each area's wall is its BOSS — the small packs stay passable for a skilled
-// player. Area 3+ is meant to be cleared only once the (future) skill tree lands.
+// player. Area 3+ is meant to be cleared only once the skill tree lands.
+
+import type { SkillNode } from "./types";
 
 export const CONFIG = {
   // --- Party damage dealers (AI auto-attackers; the player can't control them) ---
@@ -52,6 +54,8 @@ export const CONFIG = {
     slowHeal: { castTime: 3.0, cooldown: 2.0, heal: 30, mana: 15 }, // recast 5s
     hot: { castTime: 1.0, cooldown: 5.0, perTick: 5, interval: 1.0, duration: 10.0, mana: 20 }, // 50 over 10s
     aoeHeal: { castTime: 3.0, cooldown: 7.0, heal: 15, mana: 25 }, // all party, recast 10s
+    // Skill-tree unlock: revive a DEAD ally. The long cast + mana cost is the price.
+    resurrect: { castTime: 5.0, cooldown: 0, mana: 30, reviveFraction: 0.1 }, // +10%/rank via Greater Resurrection
   },
 
   // --- Between-fight recovery (applied once at each fight transition in an area) ---
@@ -59,6 +63,18 @@ export const CONFIG = {
     hpFraction: 0.1, // living members heal +10% max HP
     manaFraction: 0.1, // healer regains +10% max mana
     reviveHpFraction: 0.1, // dead members revive at 10% max HP
+  },
+
+  // --- XP / leveling ---
+  // Killing an enemy grants its archetype's `xp`. Each level grants `spPerLevel`
+  // skill points. `levelThresholds[L-1]` is the cumulative XP to REACH level L
+  // (index 0 = level 1 = 0 XP); past the table each further level costs the prior
+  // gap + `thresholdRamp`. Tuned so a first-try campaign yields ~50 SP (~28% of the
+  // 175-SP tree), ~2 levels/area, and the first fight (2 imps = 20 XP) hits level 2.
+  progression: {
+    spPerLevel: 5,
+    levelThresholds: [0, 20, 80, 150, 225, 310, 405, 520, 660, 810, 985],
+    thresholdRamp: 190,
   },
 
   // --- Enemy archetypes ---
@@ -78,11 +94,11 @@ export const CONFIG = {
     // tuned to stay PASSABLE for a skilled player in every area (so each area's
     // wall is its boss, not its packs); difficulty rises gently a1 -> a5, with the
     // a4/a5 line cleaves reaching the backline.
-    a1small: { name: "Imp", maxHp: 90, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
-    a2small: { name: "Kobold", maxHp: 95, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
-    a3small: { name: "Gnoll", maxHp: 95, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
-    a4small: { name: "Marauder", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
-    a5small: { name: "Reaver", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
+    a1small: { name: "Imp", maxHp: 90, xp: 10, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 8 } } },
+    a2small: { name: "Kobold", maxHp: 95, xp: 12, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 9 } } },
+    a3small: { name: "Gnoll", maxHp: 95, xp: 15, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 9 } } },
+    a4small: { name: "Marauder", maxHp: 100, xp: 18, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 10 }, line: { castTime: 3.2, damage: 7 } } },
+    a5small: { name: "Reaver", maxHp: 100, xp: 22, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.3, damage: 9 }, line: { castTime: 3.0, damage: 7 } } },
 
     // Boss 1 — single-target claws on the tank only. The gentle introduction; a
     // comfortable cap on area 1 that a skilled healer clears with mana to spare.
@@ -90,6 +106,7 @@ export const CONFIG = {
       name: "Ogre Brute",
       isBoss: true,
       maxHp: 480,
+      xp: 30,
       rotation: ["claw"],
       attacks: { claw: { castTime: 2.6, damage: 15 } },
     },
@@ -100,6 +117,7 @@ export const CONFIG = {
       name: "Cleaver",
       isBoss: true,
       maxHp: 700,
+      xp: 45,
       rotation: ["claw", "claw", "line", "claw"],
       attacks: { claw: { castTime: 2.6, damage: 17 }, line: { castTime: 3.0, damage: 11 } },
     },
@@ -111,6 +129,7 @@ export const CONFIG = {
       name: "Ogre",
       isBoss: true,
       maxHp: 1050,
+      xp: 60,
       rotation: ["claw", "claw", "line", "claw", "claw", "aoe"],
       attacks: {
         claw: { castTime: 2.6, damage: 29 },
@@ -126,6 +145,7 @@ export const CONFIG = {
       name: "Cursed Warlord",
       isBoss: true,
       maxHp: 1050,
+      xp: 80,
       rotation: ["claw", "cleave", "claw", "curse", "claw", "aoe"],
       attacks: {
         claw: { castTime: 2.5, damage: 16 },
@@ -141,6 +161,7 @@ export const CONFIG = {
       name: "Dread Tyrant",
       isBoss: true,
       maxHp: 1100,
+      xp: 100,
       rotation: ["claw", "smash", "cleave", "claw", "curse", "aoe"],
       attacks: {
         claw: { castTime: 2.4, damage: 17 },
@@ -202,3 +223,62 @@ export const CONFIG = {
 function r(type: string, row: number, col: number) {
   return { type, row, col };
 }
+
+// --- Skill tree (kept outside `as const` so the derivation module reads plain
+// arrays, not readonly tuples). Three branches radiate from the free center node
+// `heal`. A node is buyable once every prereq has >= 1 rank; cost is per-rank
+// (active abilities cost more for rank 1). Effect math lives in skills.ts by id.
+// Total purchasable cost == 175 SP (asserted by skills.ts).
+export const SKILL_NODES: SkillNode[] = [
+  // Center — the always-owned Heal and its upgrades.
+  { id: "heal", name: "Heal", description: "Your core single-target heal. 3.0s cast, 30 HP, 15 mana.", branch: "heal", prereqs: [], maxRank: 1, costs: [0] },
+  { id: "potent-heal", name: "Potent Heal", description: "+5 HP healed by Heal per rank.", branch: "heal", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "efficient-heal", name: "Efficient Heal", description: "-1 mana cost of Heal per rank.", branch: "heal", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "swift-heal", name: "Swift Heal", description: "-0.1s cast time of Heal per rank.", branch: "heal", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+
+  // Branch A — Healing spine: Heal -> Quick Heal -> Regen -> Group Heal -> Resurrect.
+  { id: "quick-heal", name: "Quick Heal", description: "Unlock a fast panic heal. 1.0s cast, 15 HP, 10 mana.", branch: "heal", prereqs: ["heal"], maxRank: 1, costs: [4] },
+  { id: "potent-quick-heal", name: "Potent Quick Heal", description: "+2 HP healed by Quick Heal per rank.", branch: "heal", prereqs: ["quick-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "efficient-quick-heal", name: "Efficient Quick Heal", description: "-1 mana cost of Quick Heal per rank.", branch: "heal", prereqs: ["quick-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "swift-quick-heal", name: "Swift Quick Heal", description: "-0.1s cast time of Quick Heal per rank.", branch: "heal", prereqs: ["quick-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "regen", name: "Regen", description: "Unlock a heal-over-time. 5 HP/tick for 10s, 20 mana.", branch: "heal", prereqs: ["quick-heal"], maxRank: 1, costs: [4] },
+  { id: "lingering-regen", name: "Lingering Regen", description: "+2s Regen duration per rank.", branch: "heal", prereqs: ["regen"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "efficient-regen", name: "Efficient Regen", description: "-1 mana cost of Regen per rank.", branch: "heal", prereqs: ["regen"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "swift-regen", name: "Swift Regen", description: "-0.1s cast time of Regen per rank.", branch: "heal", prereqs: ["regen"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "group-heal", name: "Group Heal", description: "Unlock a heal on all living allies. 15 HP each, 25 mana.", branch: "heal", prereqs: ["regen"], maxRank: 1, costs: [4] },
+  { id: "wide-grace", name: "Wide Grace", description: "+4 HP healed by Group Heal per rank.", branch: "heal", prereqs: ["group-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "efficient-group-heal", name: "Efficient Group Heal", description: "-1 mana cost of Group Heal per rank.", branch: "heal", prereqs: ["group-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "swift-group-heal", name: "Swift Group Heal", description: "-0.1s cast time of Group Heal per rank.", branch: "heal", prereqs: ["group-heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "resurrect", name: "Resurrect", description: "Unlock a revive for a dead ally. 5.0s cast, 30 mana, 10% HP.", branch: "heal", prereqs: ["group-heal"], maxRank: 1, costs: [6] },
+  { id: "greater-resurrection", name: "Greater Resurrection", description: "+10% HP restored by Resurrect per rank.", branch: "heal", prereqs: ["resurrect"], maxRank: 3, costs: [1, 1, 1] },
+
+  // Branch B — Sustain.
+  { id: "mana-pool", name: "Mana Pool", description: "+10 maximum mana per rank.", branch: "sustain", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "meditation", name: "Meditation", description: "+0.3 mana/sec regen per rank.", branch: "sustain", prereqs: ["mana-pool"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "second-wind", name: "Second Wind", description: "+5% between-fight HP & mana recovery per rank.", branch: "sustain", prereqs: ["mana-pool"], maxRank: 2, costs: [1, 1] },
+  { id: "field-rations", name: "Field Rations", description: "Revived allies return with +10% HP per rank.", branch: "sustain", prereqs: ["second-wind"], maxRank: 2, costs: [1, 1] },
+  { id: "crit-heals", name: "Crit Heals", description: "+10% chance per rank for a heal to land at 1.5x.", branch: "sustain", prereqs: ["meditation"], maxRank: 2, costs: [1, 1] },
+  { id: "overheal-shield", name: "Overheal Shield", description: "Overhealing becomes a temporary absorb shield (cap 15 HP).", branch: "sustain", prereqs: ["meditation"], maxRank: 1, costs: [8] },
+  { id: "reinforced-shield", name: "Reinforced Shield", description: "+5 Overheal Shield cap per rank.", branch: "sustain", prereqs: ["overheal-shield"], maxRank: 3, costs: [1, 1, 1] },
+
+  // Branch C — Party (auto-cast abilities fire on cooldown). Tank sub-spine.
+  { id: "tank-training", name: "Tank Training", description: "+15 Tank max HP per rank.", branch: "party", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "heavy-strikes", name: "Heavy Strikes", description: "+2 Tank attack damage per rank.", branch: "party", prereqs: ["tank-training"], maxRank: 2, costs: [1, 1] },
+  { id: "shield-wall", name: "Shield Wall", description: "Tank gains a shield blocking the next hit every 15s; +1 hit absorbed per rank (1/2/3).", branch: "party", prereqs: ["tank-training"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "thorns", name: "Thorns", description: "Tank reflects melee damage taken for 10s every 20s; +10% reflected per rank (10/20/30%).", branch: "party", prereqs: ["shield-wall"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "bulwark", name: "Bulwark", description: "Every 60s, the whole party gains a shield blocking their next hit.", branch: "party", prereqs: ["thorns"], maxRank: 1, costs: [8] },
+
+  // Ranger sub-spine.
+  { id: "deadeye", name: "Deadeye", description: "+2 Ranger attack damage per rank.", branch: "party", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "ranger-training", name: "Ranger Training", description: "+10 Ranger max HP per rank.", branch: "party", prereqs: ["deadeye"], maxRank: 2, costs: [1, 1] },
+  { id: "aimed-shot", name: "Aimed Shot", description: "Ranger fires a strong shot at the focus every 10s; +10 damage per rank (35/45/55).", branch: "party", prereqs: ["deadeye"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "volley", name: "Volley", description: "Ranger hits the focus + 2 others every 15s; +4 damage per rank (12/16/20).", branch: "party", prereqs: ["aimed-shot"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "serpent-sting", name: "Serpent Sting", description: "Ranger applies a damage-over-time to the focus every 10s; +1/tick per rank (4/5/6).", branch: "party", prereqs: ["volley"], maxRank: 3, costs: [8, 2, 2] },
+
+  // Mage sub-spine.
+  { id: "arcane-power", name: "Arcane Power", description: "+2 Mage attack damage per rank.", branch: "party", prereqs: ["heal"], maxRank: 3, costs: [1, 1, 1] },
+  { id: "mage-training", name: "Mage Training", description: "+10 Mage max HP per rank.", branch: "party", prereqs: ["arcane-power"], maxRank: 2, costs: [1, 1] },
+  { id: "fireball", name: "Fireball", description: "Mage nukes the focus every 15s; +12 damage per rank (45/57/69).", branch: "party", prereqs: ["arcane-power"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "firestorm", name: "Firestorm", description: "Mage hits all enemies every 20s; +6 damage per rank (20/26/32).", branch: "party", prereqs: ["fireball"], maxRank: 3, costs: [4, 2, 2] },
+  { id: "arcane-conduit", name: "Arcane Conduit", description: "Mage restores mana to the healer every 20s; +5 per rank (10/15/20).", branch: "party", prereqs: ["firestorm"], maxRank: 3, costs: [8, 2, 2] },
+];
