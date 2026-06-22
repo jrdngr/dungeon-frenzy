@@ -16,6 +16,7 @@ import {
   applyHot,
   autoAttackers,
   enemy,
+  enemyTargetPriority,
   findEntity,
   frontmostLiving,
   livingParty,
@@ -53,10 +54,8 @@ export function createInitialState(): GameState {
     events: [],
     stats: {
       damageDealt: 0,
-      damageTaken: 0,
       healingDone: 0,
       overhealing: 0,
-      idleSeconds: 0,
       deaths: 0,
       ordersDropped: 0,
     },
@@ -87,7 +86,6 @@ function makeEntity(
     hots: [],
     cooldowns: {},
     alive: true,
-    idleFor: 0,
     actionCount: 0,
     enraged: false,
   };
@@ -136,7 +134,7 @@ function validateOrder(
  * checked here but only *spent/started* on completion, so replacing a cast (or a
  * mis-click) never wastes them.
  * Returns the started instance, or undefined if the order was illegal. */
-export function startAction(
+function startAction(
   state: GameState,
   casterId: string,
   def: ActionDef,
@@ -164,7 +162,7 @@ export function startAction(
 /** Bank an order to auto-start when the current cast ends. Deliberately lenient
  * (alive caster is enough): legality is re-checked at promotion, so the player
  * may queue a heal they can't afford or that's still on cooldown *yet*. */
-export function queueAction(
+function queueAction(
   state: GameState,
   casterId: string,
   def: ActionDef,
@@ -232,13 +230,14 @@ function promoteQueued(state: GameState, e: Entity): void {
 }
 
 /** Which living party member the enemy single-target Claws: the tank, then a
- * random living damage dealer, then the healer. */
+ * random living damage dealer, then the healer. Shares frontmostLiving's
+ * priority skeleton but picks the DPS at random (vs frontmostLiving's
+ * deterministic first DPS) — that divergence is intentional. */
 function clawTargetId(state: GameState): string | undefined {
-  const tank = state.entities.find((e) => e.kind === "tank" && e.alive);
-  if (tank) return tank.id;
-  const dps = state.entities.filter((e) => isDPS(e) && e.alive);
-  if (dps.length > 0) return dps[Math.floor(Math.random() * dps.length)].id;
-  return state.entities.find((e) => e.kind === "healer" && e.alive)?.id;
+  return enemyTargetPriority(
+    state,
+    (dps) => dps[Math.floor(Math.random() * dps.length)],
+  )?.id;
 }
 
 /** Enemy decision-making: a fixed rotation indexed by completed combat actions.
@@ -281,7 +280,6 @@ function startEnemyAction(state: GameState): void {
 function startAutoAttacks(state: GameState): void {
   for (const a of autoAttackers(state)) {
     if (!a.alive || a.current || a.queued) continue;
-    if (a.kind !== "tank" && a.kind !== "ranger" && a.kind !== "mage") continue;
     const started = startAction(state, a.id, autoAttackFor(a.kind));
     if (started) started.auto = true;
   }
@@ -372,17 +370,7 @@ export function update(state: GameState, dt: number): void {
   }
   tickHots(state, dt);
 
-  // 2. Idle tracking (book-keeping for stats).
-  for (const e of state.entities) {
-    if (isParty(e) && e.alive && !e.current) {
-      e.idleFor += dt;
-      state.stats.idleSeconds += dt;
-    } else {
-      e.idleFor = 0;
-    }
-  }
-
-  // 3. Advance casts and resolve completed ones.
+  // 2. Advance casts and resolve completed ones.
   for (const e of state.entities) {
     if (!e.alive || !e.current) continue;
     e.current.elapsed += dt;
@@ -400,7 +388,7 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // 3a. Safety net: any idle party member with a banked order tries to start it
+  // 2a. Safety net: any idle party member with a banked order tries to start it
   // (or keeps waiting if it's only blocked by mana/cooldown).
   for (const e of state.entities) {
     if (isParty(e) && e.alive && !e.current && e.queued) {
@@ -408,16 +396,16 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // 3b. Idle attackers with nothing banked swing automatically.
+  // 2b. Idle attackers with nothing banked swing automatically.
   startAutoAttacks(state);
 
-  // 3c. Keep the enemy busy (it never idles while the party lives).
+  // 2c. Keep the enemy busy (it never idles while the party lives).
   const en = enemy(state);
   if (en && en.alive && !en.current && livingParty(state).length > 0) {
     startEnemyAction(state);
   }
 
-  // 4. Enrage when the enemy drops below the threshold. The current cast finishes
+  // 3. Enrage when the enemy drops below the threshold. The current cast finishes
   // as-is; the next action uses the enraged stats.
   if (
     en &&
@@ -429,7 +417,7 @@ export function update(state: GameState, dt: number): void {
     state.events.push({ kind: "enrage", entityId: en.id, at: state.elapsedTime });
   }
 
-  // 5. Clean up: dead casters drop their action/queue; clear a stale armed spell.
+  // 4. Clean up: dead casters drop their action/queue; clear a stale armed spell.
   for (const e of state.entities) {
     if (!e.alive) {
       e.current = undefined;
@@ -441,7 +429,7 @@ export function update(state: GameState, dt: number): void {
     if (!h || !h.alive) state.armedSpellId = undefined;
   }
 
-  // 6. Win/lose. You lose if the party is wiped OR no damage dealer remains: the
+  // 5. Win/lose. You lose if the party is wiped OR no damage dealer remains: the
   // healer alone can't kill the enemy, so the fight is unwinnable -> a loss.
   if (en && !en.alive) {
     state.phase = "won";
@@ -451,7 +439,7 @@ export function update(state: GameState, dt: number): void {
     if (living.length === 0 || !canStillWin) state.phase = "lost";
   }
 
-  // 7. Drop events the UI is done animating.
+  // 6. Drop events the UI is done animating.
   state.events = state.events.filter(
     (ev) => ev.at > state.elapsedTime - EVENT_TTL,
   );

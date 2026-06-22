@@ -2,7 +2,7 @@
 // an entity casting one wraps it in an ActionInstance.
 
 import { CONFIG } from "./config";
-import type { ActionDef } from "./types";
+import type { ActionDef, AutoAttackerKind } from "./types";
 
 const c = CONFIG;
 
@@ -35,7 +35,7 @@ export const MAGE_ATTACK: ActionDef = {
 };
 
 /** The auto-attack for a given attacker kind. */
-export function autoAttackFor(kind: "tank" | "ranger" | "mage"): ActionDef {
+export function autoAttackFor(kind: AutoAttackerKind): ActionDef {
   switch (kind) {
     case "tank":
       return TANK_ATTACK;

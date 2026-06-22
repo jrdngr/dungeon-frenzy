@@ -17,8 +17,8 @@ import {
   pointInToken,
 } from "./layout";
 
-/** Ability hotkeys map left-to-right onto the healer's spell list (Q W E R). */
-export const ABILITY_KEYS = ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"];
+/** Ability hotkeys, left-to-right onto the healer's four spells (Q W E R). */
+export const ABILITY_KEYS = ["q", "w", "e", "r"];
 
 const ROLE_ORDER: Record<string, number> = {
   tank: 0,

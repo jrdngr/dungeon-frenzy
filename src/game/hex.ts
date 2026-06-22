@@ -1,4 +1,5 @@
-// Axial hex math + pixel layout. Pointy-top hexes.
+// Axial hex math + pixel layout. Pointy-top hexes. Movement is gone, so this is
+// now only the layout/geometry the visual-only grid needs.
 
 import type { Hex } from "./types";
 
@@ -15,29 +16,6 @@ export function hexToPixel(hex: Hex, size: number, origin: Point): Point {
   return { x: origin.x + x, y: origin.y + y };
 }
 
-/** Inverse of hexToPixel: which hex contains this pixel point? */
-export function pixelToHex(p: Point, size: number, origin: Point): Hex {
-  const x = (p.x - origin.x) / size;
-  const y = (p.y - origin.y) / size;
-  const q = (Math.sqrt(3) / 3) * x - (1 / 3) * y;
-  const r = (2 / 3) * y;
-  return hexRound(q, r);
-}
-
-/** Round fractional axial coordinates to the nearest hex (via cube rounding). */
-function hexRound(qf: number, rf: number): Hex {
-  const sf = -qf - rf;
-  let q = Math.round(qf);
-  let r = Math.round(rf);
-  const s = Math.round(sf);
-  const dq = Math.abs(q - qf);
-  const dr = Math.abs(r - rf);
-  const ds = Math.abs(s - sf);
-  if (dq > dr && dq > ds) q = -r - s;
-  else if (dr > ds) r = -q - s;
-  return { q, r };
-}
-
 /** The six corner points of a pointy-top hex centered at `center`. */
 export function hexCorners(center: Point, size: number): Point[] {
   const corners: Point[] = [];
@@ -51,33 +29,15 @@ export function hexCorners(center: Point, size: number): Point[] {
   return corners;
 }
 
-export function hexEquals(a: Hex, b: Hex): boolean {
-  return a.q === b.q && a.r === b.r;
-}
-
 /** Hex grid distance between two axial coordinates. */
-export function hexDistance(a: Hex, b: Hex): number {
+function hexDistance(a: Hex, b: Hex): number {
   const dq = a.q - b.q;
   const dr = a.r - b.r;
   return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
 }
 
-const DIRECTIONS: Hex[] = [
-  { q: 1, r: 0 },
-  { q: 1, r: -1 },
-  { q: 0, r: -1 },
-  { q: -1, r: 0 },
-  { q: -1, r: 1 },
-  { q: 0, r: 1 },
-];
-
-/** The six hexes adjacent to `h`. */
-export function hexNeighbors(h: Hex): Hex[] {
-  return DIRECTIONS.map((d) => ({ q: h.q + d.q, r: h.r + d.r }));
-}
-
 /** Is `h` within a hex disk of the given radius centered on the origin? */
-export function inDisk(h: Hex, radius: number): boolean {
+function inDisk(h: Hex, radius: number): boolean {
   return hexDistance(h, { q: 0, r: 0 }) <= radius;
 }
 

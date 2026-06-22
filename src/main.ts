@@ -27,7 +27,9 @@ canvas.addEventListener("click", (ev) => {
 window.addEventListener("keydown", (ev) => {
   if (ev.metaKey || ev.ctrlKey || ev.altKey) return; // leave browser shortcuts alone
   unlock();
-  if (ev.key.toLowerCase() === "m") {
+  // Mute only while playing; on the end screen let M fall through so it
+  // restarts like any other key (the overlay invites "press a key to play again").
+  if (state.phase === "playing" && ev.key.toLowerCase() === "m") {
     toggleMute();
     return;
   }

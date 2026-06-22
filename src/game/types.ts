@@ -1,6 +1,10 @@
 // Core data model for Dungeon Frenzy. Pure data — no rendering concerns here.
 
-export type EntityKind = "tank" | "ranger" | "mage" | "healer" | "enemy";
+/** Party members that auto-attack the enemy on their own. The player controls
+ * only the healer; everyone else in this set is an AI damage dealer. */
+export type AutoAttackerKind = "tank" | "ranger" | "mage";
+
+export type EntityKind = AutoAttackerKind | "healer" | "enemy";
 
 /** Axial hex coordinate. Movement is gone — positions are fixed — but the grid
  * is real so the battlefield can be drawn and later iterations can re-add it. */
@@ -75,8 +79,6 @@ export interface Entity {
   /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready). */
   cooldowns: Record<string, number>;
   alive: boolean;
-  /** Seconds this (party) entity has been idle; 0 while casting or dead. */
-  idleFor: number;
   /** Enemy-only: counts completed actions to drive the attack rotation. */
   actionCount: number;
   /** Enemy-only: true once HP drops below the enrage threshold. */
@@ -94,10 +96,8 @@ export type GameEvent =
 /** Cumulative battle stats, shown on the end screen. */
 export interface Stats {
   damageDealt: number; // party -> enemy
-  damageTaken: number; // enemy -> party
   healingDone: number; // effective healing (excludes overheal)
   overhealing: number;
-  idleSeconds: number; // summed across living party members
   deaths: number;
   /** Queued orders that were invalid by the time they would have started. */
   ordersDropped: number;
@@ -118,8 +118,6 @@ export interface GameState {
   stats: Stats;
 }
 
-export const PARTY_KINDS: EntityKind[] = ["tank", "ranger", "mage", "healer"];
-
 export function isParty(e: Entity): boolean {
   return e.kind !== "enemy";
 }
@@ -127,4 +125,12 @@ export function isParty(e: Entity): boolean {
 /** A directly-damageable damage dealer (not the tank, not the healer). */
 export function isDPS(e: Entity): boolean {
   return e.kind === "ranger" || e.kind === "mage";
+}
+
+/** Party members that auto-attack the enemy on their own (tank/ranger/mage).
+ * Narrows `kind` so callers can hand it to autoAttackFor without a cast. */
+export function isAutoAttacker(
+  e: Entity,
+): e is Entity & { kind: AutoAttackerKind } {
+  return e.kind === "tank" || e.kind === "ranger" || e.kind === "mage";
 }
