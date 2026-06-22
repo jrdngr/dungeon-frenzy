@@ -69,8 +69,9 @@ function offCooldown(e: Entity, def: ActionDef): boolean {
   return (e.cooldowns[def.id] ?? 0) <= 0;
 }
 
-/** Is this spell castable right now? Drives input rejection and the greyed-out
- * button. */
+/** Is this spell castable right now (alive, can afford it, off cooldown)? Drives
+ * the dimmed-button look and the "not enough mana" hint — it does NOT gate
+ * arming. You can always select a spell; only casting it is blocked. */
 export function canUse(state: GameState, def: ActionDef): boolean {
   const h = healerOf(state);
   if (!h || !h.alive) return false;
@@ -225,9 +226,11 @@ function handleSkillTreeClick(state: GameState, p: Point): void {
 function onSpellButton(state: GameState, def: ActionDef): void {
   const h = healerOf(state);
   if (!h || !h.alive) return;
-  if (!canUse(state, def)) return; // button renders greyed out
 
-  // Arm the spell (sticky until Esc or another spell). Re-pressing the armed
-  // spell is a no-op; you must click an ally or press 1-4 to cast.
+  // Arming is always allowed for a live healer — affordability and cooldown only
+  // gate the actual cast (see validateOrder). You can pre-select a spell you
+  // can't yet pay for and it fires the moment you can. The spell is sticky until
+  // Esc or another spell; re-pressing the armed spell is a no-op (click an ally
+  // or press 1-4 to cast).
   state.armedSpellId = def.id;
 }

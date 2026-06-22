@@ -11,7 +11,7 @@ import { canPurchase, nextNodeCost, rankOf } from "../game/skills";
 import { CONFIG, SKILL_NODES } from "../game/config";
 import type { ActionDef, Entity, GameState, SkillNode } from "../game/types";
 import { isParty } from "../game/types";
-import { ABILITY_KEYS, areaUnlocked, canUse, partySlots } from "./input";
+import { ABILITY_KEYS, areaUnlocked, canAfford, canUse, partySlots } from "./input";
 import {
   actionButtons,
   areaCardRect,
@@ -589,15 +589,25 @@ function drawPanel(
   }
 
   const armedDef = state.armedSpellId ? HEALER_SPELL(state, state.armedSpellId) : undefined;
-  ctx.fillStyle = armedDef ? COLORS.armed : COLORS.subtext;
+  // When the armed spell can't be paid for, say so instead of letting target
+  // clicks fail silently — you can still keep it armed and it fires once mana regens.
+  const needMana =
+    !!armedDef &&
+    armedDef.manaCost !== undefined &&
+    !!h &&
+    h.alive &&
+    !canAfford(h, armedDef);
+  ctx.fillStyle = needMana ? COLORS.hpLow : armedDef ? COLORS.armed : COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillText(
     armedDef
-      ? armedDef.targeting === "ally-dead"
-        ? `${armedDef.name} armed — click a fallen ally (or press its number) to revive`
-        : `${armedDef.name} armed — click an ally (or press its number) to cast`
+      ? needMana
+        ? `${armedDef.name} armed — need ${armedDef.manaCost} mana to cast (have ${Math.floor(h!.mana)})`
+        : armedDef.targeting === "ally-dead"
+          ? `${armedDef.name} armed — click a fallen ally (or press its number) to revive`
+          : `${armedDef.name} armed — click an ally (or press its number) to cast`
       : "Pick a spell (hotkey or click), then click an ally to heal · click an enemy to focus-fire",
     PANEL.x + PANEL.w / 2,
     PANEL.y + 10,
@@ -1227,7 +1237,10 @@ function button(
   st: ButtonState,
 ): void {
   const { disabled, cdFrac = 0, cdRemain = 0 } = st;
-  ctx.fillStyle = disabled ? "#13161c" : armed ? "#2a2f1a" : "#1b2029";
+  // Armed wins over disabled: a spell you've selected but can't yet cast (no
+  // mana / on cooldown) still shows the olive "selected" fill, with dimmed text
+  // signalling it isn't castable right now.
+  ctx.fillStyle = armed ? "#2a2f1a" : disabled ? "#13161c" : "#1b2029";
   ctx.fillRect(r.x, r.y, r.w, r.h);
   ctx.strokeStyle = armed ? COLORS.armed : "#333a47";
   ctx.lineWidth = armed ? 2 : 1;
