@@ -39,12 +39,13 @@ export const CONFIG = {
     maxHp: 80,
     maxMana: 100,
     manaRegen: 1.5, // per second (halved: mana is now scarce across an area's 3 fights)
-    // HP-per-mana: Renew 3.56 > Slow 2.29 > AoE <=2.35 > Fast 1.10.
-    // Fast Heal is the spammable emergency; leaning on it is how you go OOM.
-    fastHeal: { castTime: 1.5, cooldown: 0, heal: 22, mana: 20 },
-    slowHeal: { castTime: 3.0, cooldown: 3.0, heal: 55, mana: 24 }, // recast 6s
-    hot: { castTime: 1.5, cooldown: 6.5, perTick: 8, interval: 1.0, duration: 8.0, mana: 18 },
-    aoeHeal: { castTime: 2.5, cooldown: 7.5, heal: 20, mana: 34 }, // all party, recast 10s
+    // HP-per-mana: Renew 2.5 > Group 2.4 > Slow 2.0 > Fast 1.5. Renew is the cheap
+    // rolling anchor (small net mana drain); Fast is the fast (1s) but draining
+    // panic button — leaning on it is how you go OOM.
+    fastHeal: { castTime: 1.0, cooldown: 0.5, heal: 15, mana: 10 }, // recast 1.5s
+    slowHeal: { castTime: 3.0, cooldown: 2.0, heal: 30, mana: 15 }, // recast 5s
+    hot: { castTime: 1.0, cooldown: 5.0, perTick: 5, interval: 1.0, duration: 10.0, mana: 20 }, // 50 over 10s
+    aoeHeal: { castTime: 3.0, cooldown: 7.0, heal: 15, mana: 25 }, // all party, recast 10s
   },
 
   // --- Between-fight recovery (applied once at each fight transition in an area) ---

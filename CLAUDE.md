@@ -7,9 +7,8 @@ of **5 areas**, each **3 fights** (small pack → bigger pack → boss) where HP
 carry across the fights of an area. Enemies fight in **front/back rows** — the
 party focus-fires one front-row enemy (click it; back-row enemies are shielded
 until the front row dies). Everything is immobile; the hex grid is visual layout
-only. Built with TypeScript + HTML5 Canvas + Vite. See `docs/initial-design.md`
-for the vision and per-iteration scope (the game was cut back to a single-fight
-healing core in Iteration 7, then re-expanded into the campaign in Iteration 8).
+only. Built with TypeScript + HTML5 Canvas + Vite. See `README.md` for a
+high-level overview of the game and how to run it.
 
 ## Running
 
@@ -21,7 +20,7 @@ healing core in Iteration 7, then re-expanded into the campaign in Iteration 8).
 ## Repo layout
 
 ```
-docs/initial-design.md   High-level design + current iteration's spec/balance.
+README.md                High-level overview of the game + how to run it.
 index.html               Entry HTML; hosts the <canvas> and loads src/main.ts.
 src/main.ts              Wires up the canvas and runs the requestAnimationFrame loop.
 src/style.css            Page styling.
@@ -48,8 +47,9 @@ src/ui/                  Rendering + input — all canvas/DOM lives here.
   This separation keeps the core testable and ready for later iterations.
 - **Tune balance in one place.** Adjust HP, damage, cast times, and enemy AI
   cadence in `src/game/config.ts` — not scattered across files.
-- **Build iteratively.** `docs/initial-design.md` tracks the roadmap; update its
-  iteration section when scope changes.
+- **The code is the source of truth.** There's no design-doc roadmap; `README.md`
+  is a high-level overview for newcomers — keep it (and this file) current when
+  scope changes.
 
 ## Tooling
 
