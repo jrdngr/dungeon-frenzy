@@ -264,7 +264,7 @@ stopped reading as a rescue. Replaced with a *player-triggered* pause:
   raised above 0 to turn the pause back into slow-mo if full stop proves
   too generous.
 
-## Iteration 6 (current scope): fighters auto-attack
+## Iteration 6 (done): fighters auto-attack
 
 Re-ordering the basic Attack was busywork: it was almost always the right
 default, so clicking it taught nothing. Now it *is* the default:
@@ -283,6 +283,77 @@ default, so clicking it taught nothing. Now it *is* the default:
 - **The tactical pause treats an auto-attacking fighter as idle**: selecting
   it stops time, because the player selected it to choose an override — the
   same decision moment as selecting a truly idle unit.
+
+## Iteration 7 (current scope): cut back to a pure healing game
+
+Iterations 1–6 grew the game into a busy party-manager (movement, fighter kits,
+auto-attacks, tactical pause). To find the fun before re-expanding, Iteration 7
+**cuts it all the way back to the classic MMO healer game**: you play only the
+healer and keep an auto-fighting party alive. Everything is immobile — the hex
+grid is now visual layout only (movement, the tactical pause, Brace/Heavy Swing,
+shields, and range checks are all gone).
+
+### Setup
+
+- **Party (4, fixed formation):** a **tank** in front (adjacent to the enemy),
+  **ranger** + **mage** on the middle row, the player's **healer** in the back.
+  Tank/ranger/mage are AI auto-attackers the player can't control — they are
+  heal targets and the damage clock. **Enemy:** 1 ("Ogre").
+- **Win:** enemy to 0 HP. **Lose:** the party is wiped *or* no tank/damage dealer
+  remains (a lone healer can't deal damage, so the fight is unwinnable → loss).
+
+### Enemy attacks (fixed rotation `[Claw, Claw, Line, Claw, Claw, AoE]`)
+
+| Attack | Cast | Effect                                                       |
+| ------ | ---- | ------------------------------------------------------------ |
+| Claw   | 2.6s | 30 to the tank (then a random DPS, then the healer, as they die) |
+| Line   | 3.0s | 14 to the tank **+ 14 to one random other** (the only regular way to hit the healer) |
+| AoE    | 3.5s | 11 to all living party                                       |
+
+Below **15% HP** the enemy **enrages** (Claw 40/2.0s, Line 19/2.4s, AoE 15/3.0s),
+a late finale that lands ~62s in — *after* mana starvation has already begun.
+
+### Healer spells (the whole kit) — real cooldowns are the new mechanic
+
+Cooldown is a post-cast lockout (recast = cast + cooldown). Each costs mana;
+mana regenerates slowly (2.7/s, 100 pool).
+
+| Spell      | Cast | Cooldown | Mana | Effect                       | HP/mana |
+| ---------- | ---- | -------- | ---- | ---------------------------- | ------- |
+| Fast Heal  | 1.5s | —        | 20   | Heal 22 (spammable emergency)| 1.10    |
+| Slow Heal  | 3.0s | 3.0s     | 24   | Heal 55                      | 2.29    |
+| Renew (HoT)| 1.5s | 6.5s     | 18   | 8/s for 8s (64 total)        | 3.56    |
+| Group Heal | 2.5s | 7.5s     | 34   | Heal 20 to **all** party     | ≤2.35   |
+
+### Controls (active-spell model)
+
+The healer is always the implicit caster — there is no unit-selection step.
+Hotkeys (Q W E R) or clicking a spell button **arm** a spell; clicking an ally
+(or pressing 1–4) **casts** it and the spell **stays armed**. Re-pressing the
+armed spell's key smart-casts on the lowest-HP ally. Group Heal still needs a
+target click even though it hits everyone. Orders issued mid-cast queue (one
+slot) and auto-start when the cast ends (waiting if only blocked by
+mana/cooldown, dropped loudly if the target dies). `X` stops the cast, `Esc`
+clears the armed spell, `M` mutes.
+
+### The point: a mana-starvation race
+
+Renew (8 HPS) doesn't quite cover the tank's ~8.6 DPS, so you supplement with
+Slow/Fast heals; total spend outruns regen and the pool drains until — by ~35s —
+you often can't even afford Fast Heal and must wait on regen. From there HP
+slips and you must finish the enemy before your mana collapses. Cooldowns stop
+you from spamming the efficient heals; Fast Heal has no cooldown but is the
+inefficient panic button (spamming it goes dry by ~14s).
+
+### Balance evidence
+
+`scripts/sim-playtest.ts` (run with `npx -y tsx scripts/sim-playtest.ts`, add
+`debug` for an annotated single-game timeline) drives the healer with scripted
+bots. A mana-conscious triager wins ~100% in ~72s but still loses ~0.5 party
+members; a Fast-Heal spammer and an AFK party lose 100%. Starvation (~35s)
+reliably precedes enrage (~62s). Knobs in `config.ts`: `manaRegen` and spell
+mana costs (difficulty), enemy `claw` damage (tank pressure), `enrage.hpFraction`
+(finale timing).
 
 ## Tech
 

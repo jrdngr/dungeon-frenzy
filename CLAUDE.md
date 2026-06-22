@@ -1,9 +1,11 @@
 # Dungeon Frenzy
 
-A real-time party-management game: keep a party of adventurers alive and busy
-while they fight an enemy, juggling each member's timed actions. Built with
-TypeScript + HTML5 Canvas + Vite. See `docs/initial-design.md` for the vision,
-core loop, and per-iteration scope.
+A real-time **healing game**: you play the party's healer, keeping a fixed,
+auto-fighting party (tank + ranger + mage + you) alive against one enemy by
+juggling four timed, mana-costed, cooldown-gated heals. Everything is immobile;
+the hex grid is now visual layout only. Built with TypeScript + HTML5 Canvas +
+Vite. See `docs/initial-design.md` for the vision and per-iteration scope (the
+game was cut back to this healing core in Iteration 7).
 
 ## Running
 
@@ -29,7 +31,7 @@ src/game/                Pure simulation — NO canvas/DOM imports here.
 src/ui/                  Rendering + input — all canvas/DOM lives here.
   layout.ts              Screen geometry (entity positions, bars, buttons) + hit-testing.
   render.ts              Draws everything from GameState; never mutates it.
-  input.ts              Click handling: the select -> action -> target state machine.
+  input.ts               Click handling: the armed-spell -> click-target model.
 ```
 
 ## Conventions
