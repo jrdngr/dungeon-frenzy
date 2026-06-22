@@ -4,70 +4,51 @@ import { CONFIG } from "./config";
 import {
   ENEMY_AOE,
   ENEMY_AOE_ENRAGED,
-  ENEMY_BASIC,
-  ENEMY_BASIC_ENRAGED,
-  FIGHTER_ATTACK,
-  MOVE_ENEMY,
+  ENEMY_CLAW,
+  ENEMY_CLAW_ENRAGED,
+  ENEMY_LINE,
+  ENEMY_LINE_ENRAGED,
+  autoAttackFor,
 } from "./actions";
 import {
   applyDamage,
   applyHeal,
   applyHot,
-  applyShield,
-  canMoveTo,
+  autoAttackers,
   enemy,
-  fighters,
   findEntity,
-  inRange,
+  frontmostLiving,
   livingParty,
   tickHots,
 } from "./combat";
-import { hexDistance, hexNeighbors } from "./hex";
 import type {
   ActionDef,
   ActionInstance,
   Entity,
   GameState,
-  Hex,
   HotInstance,
 } from "./types";
-import { isParty } from "./types";
+import { isDPS, isParty } from "./types";
 
 /** How long finished events are kept around for the UI to animate. */
 const EVENT_TTL = 3.0;
 
-/** Build a fresh battle on a hex-disk battlefield: the party holds one side,
- * the enemy starts across the field and walks in. Fighters begin between the
- * enemy and the healer — the wall the player is meant to maintain. */
+/** Build a fresh battle: the party holds a fixed formation facing the enemy.
+ * Tank in front (it soaks the enemy's focus), ranger + mage flanking the middle
+ * row, the healer (you) safe in the back. Everything is immobile. */
 export function createInitialState(): GameState {
   const entities: Entity[] = [
-    makeEntity("enemy", "enemy", "Ogre", CONFIG.enemy.maxHp, 0, {
-      q: 2,
-      r: -3,
-    }),
-    makeEntity("fighter-a", "fighter", "Fighter A", CONFIG.fighter.maxHp, 0, {
-      q: 0,
-      r: 0,
-    }),
-    makeEntity("fighter-b", "fighter", "Fighter B", CONFIG.fighter.maxHp, 0, {
-      q: 1,
-      r: 0,
-    }),
-    makeEntity(
-      "healer",
-      "healer",
-      "Healer",
-      CONFIG.healer.maxHp,
-      CONFIG.healer.maxMana,
-      { q: 0, r: 2 },
-    ),
+    makeEntity("enemy", "enemy", "Ogre", CONFIG.enemy.maxHp, 0, { q: 0, r: -3 }),
+    makeEntity("tank", "tank", "Tank", CONFIG.tank.maxHp, 0, { q: 0, r: -1 }),
+    makeEntity("ranger", "ranger", "Ranger", CONFIG.ranger.maxHp, 0, { q: -1, r: 0 }),
+    makeEntity("mage", "mage", "Mage", CONFIG.mage.maxHp, 0, { q: 1, r: 0 }),
+    makeEntity("healer", "healer", "Healer", CONFIG.healer.maxHp, CONFIG.healer.maxMana, { q: 0, r: 2 }),
   ];
 
   const state: GameState = {
     entities,
     mapRadius: CONFIG.map.radius,
     phase: "playing",
-    timeScale: 1,
     elapsedTime: 0,
     events: [],
     stats: {
@@ -75,14 +56,13 @@ export function createInitialState(): GameState {
       damageTaken: 0,
       healingDone: 0,
       overhealing: 0,
-      damageBlocked: 0,
       idleSeconds: 0,
       deaths: 0,
       ordersDropped: 0,
     },
   };
 
-  // The enemy starts acting immediately; the party waits for the player.
+  // The enemy starts acting immediately; the party auto-attacks from frame one.
   startEnemyAction(state);
   return state;
 }
@@ -105,6 +85,7 @@ function makeEntity(
     maxMana,
     hex,
     hots: [],
+    cooldowns: {},
     alive: true,
     idleFor: 0,
     actionCount: 0,
@@ -112,75 +93,86 @@ function makeEntity(
   };
 }
 
-/** Full legality check for an order: mana, move destination, target range.
- * Used both when starting an action and when promoting a queued one. */
-function validateOrder(
+type OrderStatus = "ok" | "wait" | "drop";
+
+/** Classify an order against the world right now:
+ * - "ok": legal, start it.
+ * - "wait": temporarily blocked (not enough mana yet, or still on cooldown) but
+ *   could become legal — a queued order should keep waiting, not be dropped.
+ * - "drop": permanently illegal (caster/target dead) — drop loudly. */
+function classifyOrder(
   state: GameState,
   caster: Entity,
   def: ActionDef,
   targetId?: string,
-  targetHex?: Hex,
-): boolean {
-  if (!caster.alive) return false;
-  if (def.manaCost !== undefined && caster.mana < def.manaCost) return false;
-
-  if (def.effect.kind === "move") {
-    return targetHex !== undefined && canMoveTo(state, caster, targetHex);
-  }
+): OrderStatus {
+  if (!caster.alive) return "drop";
 
   const target = targetId
     ? findEntity(state, targetId)
     : def.targeting === "enemy"
       ? enemy(state)
       : undefined;
-  if (targetId && (!target || !target.alive)) return false;
-  if (target && !inRange(caster, def, target)) return false;
-  return true;
+  if (targetId && (!target || !target.alive)) return "drop";
+  if (def.targeting === "enemy" && (!target || !target.alive)) return "drop";
+
+  if (def.manaCost !== undefined && caster.mana < def.manaCost) return "wait";
+  if ((caster.cooldowns[def.id] ?? 0) > 0) return "wait";
+  return "ok";
+}
+
+/** Full legality check for starting an action: target alive, mana, cooldown. */
+function validateOrder(
+  state: GameState,
+  caster: Entity,
+  def: ActionDef,
+  targetId?: string,
+): boolean {
+  return classifyOrder(state, caster, def, targetId) === "ok";
 }
 
 /** Begin an action on an entity, replacing whatever it was doing. Validates
- * mana, range, and move legality so an illegal order is simply ignored.
- * Mana is checked here but only spent when the cast completes, so replacing
- * a cast (or a mis-click) never wastes mana.
+ * target/mana/cooldown so an illegal order is ignored. Mana and cooldown are
+ * checked here but only *spent/started* on completion, so replacing a cast (or a
+ * mis-click) never wastes them.
  * Returns the started instance, or undefined if the order was illegal. */
 export function startAction(
   state: GameState,
   casterId: string,
   def: ActionDef,
   targetId?: string,
-  targetHex?: Hex,
+  secondaryTargetId?: string,
 ): ActionInstance | undefined {
   const caster = findEntity(state, casterId);
   if (!caster) return undefined;
-  if (!validateOrder(state, caster, def, targetId, targetHex)) return undefined;
+  if (!validateOrder(state, caster, def, targetId)) return undefined;
 
-  if (def.effect.kind === "move") {
-    caster.current = { def, elapsed: 0, targetHex };
-    return caster.current;
-  }
-  // Fighter attacks resolve their implied target now.
   const target = targetId
     ? findEntity(state, targetId)
     : def.targeting === "enemy"
       ? enemy(state)
       : undefined;
-  caster.current = { def, elapsed: 0, targetId: target?.id ?? targetId };
+  caster.current = {
+    def,
+    elapsed: 0,
+    targetId: target?.id ?? targetId,
+    secondaryTargetId,
+  };
   return caster.current;
 }
 
-/** Bank an order to auto-start when the current cast ends. Deliberately
- * lenient (alive caster is enough): legality is re-checked at promotion so
- * the player may queue a heal they can't afford *yet*. */
+/** Bank an order to auto-start when the current cast ends. Deliberately lenient
+ * (alive caster is enough): legality is re-checked at promotion, so the player
+ * may queue a heal they can't afford or that's still on cooldown *yet*. */
 export function queueAction(
   state: GameState,
   casterId: string,
   def: ActionDef,
   targetId?: string,
-  targetHex?: Hex,
 ): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive) return;
-  caster.queued = { def, elapsed: 0, targetId, targetHex };
+  caster.queued = { def, elapsed: 0, targetId };
 }
 
 /** The single entry point for player/bot orders: starts immediately when the
@@ -191,19 +183,18 @@ export function issueOrder(
   casterId: string,
   def: ActionDef,
   targetId?: string,
-  targetHex?: Hex,
 ): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive) return;
   if (caster.current && !caster.current.auto) {
-    queueAction(state, casterId, def, targetId, targetHex);
+    queueAction(state, casterId, def, targetId);
   } else {
-    startAction(state, casterId, def, targetId, targetHex);
+    startAction(state, casterId, def, targetId);
   }
 }
 
-/** Abort the current cast (free — mana is only spent on completion). Any
- * queued order starts immediately: the emergency "stop and Brace" play. */
+/** Abort the current cast (free — mana/cooldown only commit on completion). Any
+ * queued order starts immediately: the emergency "stop and re-cast" play. */
 export function cancelCast(state: GameState, casterId: string): void {
   const caster = findEntity(state, casterId);
   if (!caster || !caster.alive || !caster.current) return;
@@ -217,15 +208,19 @@ export function clearQueue(state: GameState, casterId: string): void {
   if (caster) caster.queued = undefined;
 }
 
-/** Try to start the queued order now that the unit is idle. If it has become
- * illegal (target died, mana spent, hex taken) it is dropped *loudly* — a
- * silently lost order is the worst failure mode of a queue. */
+/** Try to start the queued order now that the unit is idle. If it's only
+ * temporarily blocked (mana/cooldown) it stays banked and waits; if it has become
+ * permanently illegal (target died) it is dropped *loudly* — a silently lost
+ * order is the worst failure mode of a queue. */
 function promoteQueued(state: GameState, e: Entity): void {
   if (!e.queued || e.current || !e.alive) return;
   const q = e.queued;
+  const status = classifyOrder(state, e, q.def, q.targetId);
+  if (status === "wait") return; // keep waiting; it may become castable
   e.queued = undefined;
-  startAction(state, e.id, q.def, q.targetId, q.targetHex);
-  if (!e.current) {
+  if (status === "ok") {
+    startAction(state, e.id, q.def, q.targetId);
+  } else {
     state.stats.ordersDropped += 1;
     state.events.push({
       kind: "queue-dropped",
@@ -236,68 +231,63 @@ function promoteQueued(state: GameState, e: Entity): void {
   }
 }
 
-/** Enemy decision-making:
- * 1. Every Nth combat action is the (global, telegraphed) Roar.
- * 2. Otherwise Claw a random adjacent party member — adjacency is what makes
- *    body-blocking work: the enemy never walks past someone in its face.
- * 3. Nothing adjacent: lumber one hex toward the nearest party member.
- */
+/** Which living party member the enemy single-target Claws: the tank, then a
+ * random living damage dealer, then the healer. */
+function clawTargetId(state: GameState): string | undefined {
+  const tank = state.entities.find((e) => e.kind === "tank" && e.alive);
+  if (tank) return tank.id;
+  const dps = state.entities.filter((e) => isDPS(e) && e.alive);
+  if (dps.length > 0) return dps[Math.floor(Math.random() * dps.length)].id;
+  return state.entities.find((e) => e.kind === "healer" && e.alive)?.id;
+}
+
+/** Enemy decision-making: a fixed rotation indexed by completed combat actions.
+ * - "aoe": hit all living party (the scary, telegraphed spike).
+ * - "line": hit the frontmost living member + one random other (the only regular
+ *   way to reach the healer).
+ * - otherwise: a single-target Claw on the priority target (tank first). */
 function startEnemyAction(state: GameState): void {
   const e = enemy(state);
   if (!e || !e.alive) return;
   const party = livingParty(state);
   if (party.length === 0) return;
 
-  const basic = e.enraged ? ENEMY_BASIC_ENRAGED : ENEMY_BASIC;
+  const rotation = CONFIG.enemy.rotation;
+  const slot = rotation[e.actionCount % rotation.length];
+
+  const claw = e.enraged ? ENEMY_CLAW_ENRAGED : ENEMY_CLAW;
+  const line = e.enraged ? ENEMY_LINE_ENRAGED : ENEMY_LINE;
   const aoe = e.enraged ? ENEMY_AOE_ENRAGED : ENEMY_AOE;
 
-  const roarDue =
-    (e.actionCount + 1) % CONFIG.enemy.aoeEveryNthAction === 0;
-  if (roarDue) {
+  if (slot === "aoe") {
     startAction(state, e.id, aoe);
     return;
   }
-
-  const adjacent = party.filter(
-    (p) => hexDistance(p.hex, e.hex) <= (basic.range ?? 1),
-  );
-  if (adjacent.length > 0) {
-    const target = adjacent[Math.floor(Math.random() * adjacent.length)];
-    startAction(state, e.id, basic, target.id);
+  if (slot === "line") {
+    const primary = frontmostLiving(state);
+    const others = party.filter((p) => p !== primary);
+    const secondary =
+      others.length > 0
+        ? others[Math.floor(Math.random() * others.length)]
+        : undefined;
+    startAction(state, e.id, line, primary?.id, secondary?.id);
     return;
   }
-
-  // Walk toward the nearest living party member.
-  let nearest = party[0];
-  for (const p of party) {
-    if (hexDistance(p.hex, e.hex) < hexDistance(nearest.hex, e.hex)) nearest = p;
-  }
-  const options = hexNeighbors(e.hex).filter((h) => canMoveTo(state, e, h));
-  if (options.length === 0) return; // boxed in: retried next update
-  const currentDist = hexDistance(e.hex, nearest.hex);
-  let best = options.filter((h) => hexDistance(h, nearest.hex) < currentDist);
-  if (best.length === 0) {
-    // Can't get closer (blocked): sidestep along equal distance if possible.
-    best = options.filter((h) => hexDistance(h, nearest.hex) === currentDist);
-  }
-  if (best.length === 0) return;
-  const dest = best[Math.floor(Math.random() * best.length)];
-  startAction(state, e.id, MOVE_ENEMY, undefined, dest);
+  startAction(state, e.id, claw, clawTargetId(state));
 }
 
-/** Fighters never stand around swinging nothing: any idle fighter with no
- * banked order auto-casts the basic Attack when the enemy is in range. The
- * cast is flagged `auto` so a player order replaces it instead of queueing. */
+/** Attackers never stand around: any idle tank/ranger/mage with no banked order
+ * auto-casts its own attack. The cast is flagged `auto`. */
 function startAutoAttacks(state: GameState): void {
-  for (const f of fighters(state)) {
-    if (!f.alive || f.current || f.queued) continue;
-    // startAction validates range etc.; only flag the cast if it began.
-    const started = startAction(state, f.id, FIGHTER_ATTACK);
+  for (const a of autoAttackers(state)) {
+    if (!a.alive || a.current || a.queued) continue;
+    if (a.kind !== "tank" && a.kind !== "ranger" && a.kind !== "mage") continue;
+    const started = startAction(state, a.id, autoAttackFor(a.kind));
     if (started) started.auto = true;
   }
 }
 
-/** Resolve a completed action's effect. */
+/** Resolve a completed action's effect, spending mana and starting its cooldown. */
 function resolveAction(state: GameState, caster: Entity): void {
   const inst = caster.current;
   if (!inst) return;
@@ -306,20 +296,15 @@ function resolveAction(state: GameState, caster: Entity): void {
   if (def.manaCost !== undefined) {
     caster.mana = Math.max(0, caster.mana - def.manaCost);
   }
+  if (def.cooldown) {
+    caster.cooldowns[def.id] = def.cooldown;
+  }
 
   switch (def.effect.kind) {
-    case "move": {
-      // Re-check at arrival: someone may have stepped in during the cast.
-      if (inst.targetHex && canMoveTo(state, caster, inst.targetHex)) {
-        caster.hex = inst.targetHex;
-      }
-      break;
-    }
     case "damage": {
       const target = inst.targetId
         ? findEntity(state, inst.targetId)
         : enemy(state);
-      // Fighter attacks always hit the enemy if no explicit target.
       const finalTarget = target ?? enemy(state);
       if (finalTarget && finalTarget.alive) {
         applyDamage(state, finalTarget, def.effect.amount);
@@ -327,16 +312,12 @@ function resolveAction(state: GameState, caster: Entity): void {
       break;
     }
     case "heal": {
-      const target = inst.targetId
-        ? findEntity(state, inst.targetId)
-        : undefined;
+      const target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
       if (target && target.alive) applyHeal(state, target, def.effect.amount);
       break;
     }
     case "hot": {
-      const target = inst.targetId
-        ? findEntity(state, inst.targetId)
-        : undefined;
+      const target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
       if (target && target.alive) {
         const hot: HotInstance = {
           perTick: def.effect.perTick,
@@ -349,81 +330,53 @@ function resolveAction(state: GameState, caster: Entity): void {
       break;
     }
     case "aoe-heal": {
-      for (const f of fighters(state)) {
-        if (f.alive && inRange(caster, def, f)) {
-          applyHeal(state, f, def.effect.amount);
-        }
-      }
+      for (const p of livingParty(state)) applyHeal(state, p, def.effect.amount);
       break;
     }
     case "aoe-damage": {
-      for (const p of livingParty(state)) {
-        applyDamage(state, p, def.effect.amount);
+      for (const p of livingParty(state)) applyDamage(state, p, def.effect.amount);
+      break;
+    }
+    case "line-damage": {
+      const primary = inst.targetId
+        ? findEntity(state, inst.targetId)
+        : frontmostLiving(state);
+      if (primary && primary.alive) applyDamage(state, primary, def.effect.amount);
+      const secondary = inst.secondaryTargetId
+        ? findEntity(state, inst.secondaryTargetId)
+        : undefined;
+      if (secondary && secondary.alive && secondary !== primary) {
+        applyDamage(state, secondary, def.effect.amount);
       }
       break;
     }
-    case "shield": {
-      applyShield(state, caster, def.effect.amount, def.effect.duration);
-      break;
-    }
   }
 }
 
-/** True while the tactical pause should hold the sim: the player has a
- * living, *idle* party member selected, i.e. they are choosing its order.
- * A fighter that is only auto-attacking counts as idle — the player selected
- * it to override the auto swing, which is the same decision moment. */
-function tacticalPauseActive(state: GameState): boolean {
-  if (!state.selectedId) return false;
-  const sel = findEntity(state, state.selectedId);
-  if (!sel || !isParty(sel) || !sel.alive) return false;
-  return !sel.current || !!sel.current.auto;
-}
-
-/** Advance the whole simulation by dt *real* seconds. The tactical pause may
- * dilate the sim clock; everything below step 0 runs on game time. */
+/** Advance the whole simulation by dt seconds. */
 export function update(state: GameState, dt: number): void {
   if (state.phase !== "playing") return;
 
-  // 0. Tactical pause: ease the clock to a stop while an idle unit is
-  // selected, and back to full speed once it has orders or is deselected.
-  // The easing itself runs on real time so the ramp feels the same at any
-  // sim speed.
-  const t = CONFIG.time;
-  const target = tacticalPauseActive(state) ? t.pausedScale : 1;
-  const span = 1 - t.pausedScale; // full ramp distance
-  if (state.timeScale > target) {
-    state.timeScale = Math.max(
-      target,
-      state.timeScale - (span / t.rampDownSeconds) * dt,
-    );
-  } else if (state.timeScale < target) {
-    state.timeScale = Math.min(
-      target,
-      state.timeScale + (span / t.rampUpSeconds) * dt,
-    );
-  }
-  const sdt = dt * state.timeScale; // dilated game-time step
+  state.elapsedTime += dt;
 
-  state.elapsedTime += sdt;
-
-  // 1. Resources and timed effects.
+  // 1. Resources, cooldowns, and timed effects.
   for (const e of state.entities) {
-    if (e.alive && e.maxMana > 0) {
-      e.mana = Math.min(e.maxMana, e.mana + CONFIG.healer.manaRegen * sdt);
+    if (!e.alive) continue;
+    if (e.maxMana > 0) {
+      e.mana = Math.min(e.maxMana, e.mana + CONFIG.healer.manaRegen * dt);
     }
-    if (e.shield) {
-      e.shield.remaining -= sdt;
-      if (e.shield.remaining <= 0) e.shield = undefined;
+    for (const id in e.cooldowns) {
+      e.cooldowns[id] -= dt;
+      if (e.cooldowns[id] <= 0) delete e.cooldowns[id];
     }
   }
-  tickHots(state, sdt);
+  tickHots(state, dt);
 
-  // 2. Idle tracking (the player's core job is noticing these).
+  // 2. Idle tracking (book-keeping for stats).
   for (const e of state.entities) {
     if (isParty(e) && e.alive && !e.current) {
-      e.idleFor += sdt;
-      state.stats.idleSeconds += sdt;
+      e.idleFor += dt;
+      state.stats.idleSeconds += dt;
     } else {
       e.idleFor = 0;
     }
@@ -432,40 +385,40 @@ export function update(state: GameState, dt: number): void {
   // 3. Advance casts and resolve completed ones.
   for (const e of state.entities) {
     if (!e.alive || !e.current) continue;
-    e.current.elapsed += sdt;
+    e.current.elapsed += dt;
     if (e.current.elapsed >= e.current.def.castTime) {
-      const wasMove = e.current.def.effect.kind === "move";
       resolveAction(state, e);
       e.current = undefined;
       if (e.kind === "enemy") {
-        // Only combat actions advance the Roar schedule.
-        if (!wasMove) e.actionCount += 1;
-        // Enemy never idles — immediately queue the next action.
+        e.actionCount += 1;
         if (e.alive) startEnemyAction(state);
       } else {
-        // Party: a banked order starts now (validated against the world as
-        // it is *after* this cast resolved and spent its mana).
+        // Party: a banked order starts now (validated against the world as it is
+        // *after* this cast resolved and spent its mana / started its cooldown).
         promoteQueued(state, e);
       }
     }
   }
 
-  // 3a. Safety net: any idle party member with a banked order starts it.
+  // 3a. Safety net: any idle party member with a banked order tries to start it
+  // (or keeps waiting if it's only blocked by mana/cooldown).
   for (const e of state.entities) {
     if (isParty(e) && e.alive && !e.current && e.queued) {
       promoteQueued(state, e);
     }
   }
 
-  // 3b. Idle fighters with nothing banked swing automatically (in range).
+  // 3b. Idle attackers with nothing banked swing automatically.
   startAutoAttacks(state);
 
-  // 3c. If the enemy is idle (e.g. it was boxed in last decision), retry.
+  // 3c. Keep the enemy busy (it never idles while the party lives).
   const en = enemy(state);
-  if (en && en.alive && !en.current) startEnemyAction(state);
+  if (en && en.alive && !en.current && livingParty(state).length > 0) {
+    startEnemyAction(state);
+  }
 
-  // 4. Enrage when the enemy drops below the threshold. The current cast
-  // finishes as-is; the next action uses the enraged stats.
+  // 4. Enrage when the enemy drops below the threshold. The current cast finishes
+  // as-is; the next action uses the enraged stats.
   if (
     en &&
     en.alive &&
@@ -476,34 +429,30 @@ export function update(state: GameState, dt: number): void {
     state.events.push({ kind: "enrage", entityId: en.id, at: state.elapsedTime });
   }
 
-  // 5. Clean up: dead casters drop their action and queue; clear stale selection.
+  // 5. Clean up: dead casters drop their action/queue; clear a stale armed spell.
   for (const e of state.entities) {
     if (!e.alive) {
-      if (e.current) e.current = undefined;
-      if (e.queued) e.queued = undefined;
+      e.current = undefined;
+      e.queued = undefined;
     }
   }
-  if (state.selectedId) {
-    const sel = findEntity(state, state.selectedId);
-    if (!sel || !sel.alive) {
-      state.selectedId = undefined;
-      state.pendingActionId = undefined;
-    }
+  if (state.armedSpellId) {
+    const h = state.entities.find((e) => e.kind === "healer");
+    if (!h || !h.alive) state.armedSpellId = undefined;
   }
 
-  // 6. Win/lose.
+  // 6. Win/lose. You lose if the party is wiped OR no damage dealer remains: the
+  // healer alone can't kill the enemy, so the fight is unwinnable -> a loss.
   if (en && !en.alive) {
     state.phase = "won";
-  } else if (livingParty(state).length === 0) {
-    state.phase = "lost";
+  } else {
+    const living = livingParty(state);
+    const canStillWin = living.some((e) => e.kind === "tank" || isDPS(e));
+    if (living.length === 0 || !canStillWin) state.phase = "lost";
   }
 
   // 7. Drop events the UI is done animating.
   state.events = state.events.filter(
     (ev) => ev.at > state.elapsedTime - EVENT_TTL,
   );
-}
-
-export function isPartyMember(e: Entity): boolean {
-  return isParty(e);
 }

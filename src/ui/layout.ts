@@ -1,11 +1,8 @@
 // Screen geometry: where the grid, entities, bars, and buttons live on the
 // canvas. Kept separate from drawing so input hit-testing and rendering agree.
 
-import { hexToPixel, pixelToHex, type Point } from "../game/hex";
-import {
-  FIGHTER_ACTIONS,
-  HEALER_ACTIONS,
-} from "../game/actions";
+import { hexToPixel, type Point } from "../game/hex";
+import { HEALER_ACTIONS } from "../game/actions";
 import type { ActionDef, Entity, Hex } from "../game/types";
 
 export const CANVAS = { w: 960, h: 720 };
@@ -32,11 +29,6 @@ export function hexCenter(hex: Hex): Point {
 
 export function entityCenter(e: Entity): Point {
   return hexCenter(e.hex);
-}
-
-/** Which hex (if any grid math applies) contains this pixel point? */
-export function hexAtPoint(p: Point): Hex {
-  return pixelToHex(p, HEX_SIZE, HEX_ORIGIN);
 }
 
 /** HP bar rect, sitting above the token. Tall enough to hold the HP number. */
@@ -72,15 +64,9 @@ export interface ActionButton {
   rect: Rect;
 }
 
-export function actionsFor(e: Entity): ActionDef[] {
-  if (e.kind === "fighter") return FIGHTER_ACTIONS;
-  if (e.kind === "healer") return HEALER_ACTIONS;
-  return [];
-}
-
-/** Lay out action buttons for the selected entity inside the panel. */
-export function actionButtons(e: Entity): ActionButton[] {
-  const defs = actionsFor(e);
+/** Lay out the healer's spell buttons inside the panel. */
+export function actionButtons(): ActionButton[] {
+  const defs = HEALER_ACTIONS;
   const btnW = 164;
   const btnH = 64;
   const gap = 14;

@@ -1,35 +1,18 @@
-// Pure effect resolution. These functions mutate entity HP/HoT/shield state
-// and record events/stats, but have no knowledge of rendering or input.
+// Pure effect resolution. These functions mutate entity HP/HoT state and record
+// events/stats, but have no knowledge of rendering or input.
 
-import { hexDistance, hexEquals, inDisk } from "./hex";
-import type { ActionDef, Entity, GameState, Hex, HotInstance } from "./types";
-import { isParty } from "./types";
+import type { Entity, GameState, HotInstance } from "./types";
+import { isDPS, isParty } from "./types";
 
 export function findEntity(state: GameState, id: string): Entity | undefined {
   return state.entities.find((e) => e.id === id);
 }
 
-/** The living entity standing on `hex`, if any. Corpses don't block. */
-export function occupant(state: GameState, hex: Hex): Entity | undefined {
-  return state.entities.find((e) => e.alive && hexEquals(e.hex, hex));
-}
-
-/** Can this entity legally step onto `hex` right now? */
-export function canMoveTo(state: GameState, mover: Entity, hex: Hex): boolean {
-  return (
-    inDisk(hex, state.mapRadius) &&
-    hexDistance(mover.hex, hex) === 1 &&
-    occupant(state, hex) === undefined
+/** Party members that auto-attack the enemy (everyone but the healer). */
+export function autoAttackers(state: GameState): Entity[] {
+  return state.entities.filter(
+    (e) => e.kind === "tank" || e.kind === "ranger" || e.kind === "mage",
   );
-}
-
-/** Is `target` within `def`'s range of `caster`? Unlimited if no range set. */
-export function inRange(caster: Entity, def: ActionDef, target: Entity): boolean {
-  return def.range === undefined || hexDistance(caster.hex, target.hex) <= def.range;
-}
-
-export function fighters(state: GameState): Entity[] {
-  return state.entities.filter((e) => e.kind === "fighter");
 }
 
 export function livingParty(state: GameState): Entity[] {
@@ -40,21 +23,23 @@ export function enemy(state: GameState): Entity | undefined {
   return state.entities.find((e) => e.kind === "enemy");
 }
 
+/** The living party member the enemy targets first: tank, then a damage dealer,
+ * then the healer. Used for single-target Claws and as the line attack's
+ * primary victim. */
+export function frontmostLiving(state: GameState): Entity | undefined {
+  const tank = state.entities.find((e) => e.kind === "tank" && e.alive);
+  if (tank) return tank;
+  const dps = state.entities.find((e) => isDPS(e) && e.alive);
+  if (dps) return dps;
+  return state.entities.find((e) => e.kind === "healer" && e.alive);
+}
+
 export function applyDamage(
   state: GameState,
   target: Entity,
   amount: number,
 ): void {
   if (!target.alive) return;
-
-  // A shield (Brace) eats up to its amount from this one hit, then is spent.
-  let blocked = 0;
-  if (target.shield) {
-    blocked = Math.min(target.shield.amount, amount);
-    amount -= blocked;
-    target.shield = undefined;
-    state.stats.damageBlocked += blocked;
-  }
 
   const before = target.hp;
   target.hp = Math.max(0, target.hp - amount);
@@ -67,7 +52,6 @@ export function applyDamage(
     kind: "damage",
     entityId: target.id,
     amount: dealt,
-    blocked,
     at: state.elapsedTime,
   });
 
@@ -104,22 +88,6 @@ export function applyHot(target: Entity, hot: HotInstance): void {
   if (!target.alive) return;
   // Refresh: a re-applied HoT replaces any existing one rather than stacking.
   target.hots = [{ ...hot }];
-}
-
-export function applyShield(
-  state: GameState,
-  target: Entity,
-  amount: number,
-  duration: number,
-): void {
-  if (!target.alive) return;
-  target.shield = { amount, remaining: duration };
-  state.events.push({
-    kind: "shield",
-    entityId: target.id,
-    amount,
-    at: state.elapsedTime,
-  });
 }
 
 /** Advance every living entity's HoTs by dt, applying ticks as they come due. */

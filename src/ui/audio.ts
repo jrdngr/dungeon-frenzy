@@ -1,14 +1,12 @@
 // Synthesized audio cues (Web Audio, no assets). The point is to move
-// monitoring load from the eyes to the ears: each party member has a "ready"
-// ping at its own pitch, Roar and enrage announce themselves, and a dropped
-// queued order complains. Cues fire on transitions only — never nagging
-// (deliberately sitting idle to bank mana is correct play).
+// monitoring load from the eyes to the ears: each healer spell finishes with its
+// own pitch, a cooldown coming back chimes, and the enemy's Cleave/Roar/enrage
+// announce themselves. Cues fire on transitions only — never nagging.
 //
 // The module diffs GameState against its own previous-frame snapshot; the sim
 // stays pure and never imports this.
 
 import type { GamePhase, GameState } from "../game/types";
-import { partySlots } from "./input";
 
 let ctx: AudioContext | null = null;
 let muted = false;
@@ -16,10 +14,12 @@ let muted = false;
 let lastEventAt = 0;
 let prevPhase: GamePhase = "playing";
 let prevRoar = false;
-const prevCasting = new Map<string, boolean>();
+let prevLine = false;
+let prevHealerCast: string | undefined;
+let prevCooldowns = new Set<string>();
 
-/** Create/resume the AudioContext. Browsers require a user gesture before
- * audio may play, so call this from click/keydown handlers. */
+/** Create/resume the AudioContext. Browsers require a user gesture before audio
+ * may play, so call this from click/keydown handlers. */
 export function unlock(): void {
   if (typeof window === "undefined") return;
   const AC = window.AudioContext;
@@ -55,41 +55,65 @@ function beep(
   osc.stop(t0 + durSec + 0.05);
 }
 
-/** Ready-ping pitch per party slot (F1 low, F2 mid, healer high) so the ear
- * can tell WHO came free without looking. */
-const READY_PITCHES = [523, 659, 880];
+/** Per-spell completion pitch so the ear can tell which heal just landed. */
+const SPELL_PITCHES: Record<string, number> = {
+  "fast-heal": 660,
+  "slow-heal": 540,
+  renew: 760,
+  "aoe-heal": 900,
+};
 
 /** Call once per frame after update(). Diffs against the previous frame and
- * emits cues for: unit became idle, Roar cast started, enrage, dropped
- * queued order, win/lose. Safe to call before unlock() (no-ops, but keeps
- * the snapshots warm so unlocking doesn't replay a burst). */
+ * emits cues for: a healer spell completing, a spell's cooldown returning, the
+ * enemy's Cleave/Roar winding up, enrage, dropped orders, and win/lose. Safe to
+ * call before unlock() (no-ops, but keeps the snapshots warm). */
 export function updateAudio(state: GameState): void {
   // A restart resets elapsed time; reset our trackers with it.
   if (state.elapsedTime < lastEventAt) {
     lastEventAt = 0;
     prevRoar = false;
+    prevLine = false;
     prevPhase = "playing";
-    prevCasting.clear();
+    prevHealerCast = undefined;
+    prevCooldowns = new Set();
   }
 
-  // Per-unit casting -> idle transition: one short ping at the slot's pitch.
-  partySlots(state).forEach((e, i) => {
-    const casting = !!e.current;
-    const was = prevCasting.get(e.id) ?? false;
-    if (was && !casting && e.alive && state.phase === "playing") {
-      beep(READY_PITCHES[i] ?? 700, 0.09);
-    }
-    prevCasting.set(e.id, casting);
-  });
+  const playing = state.phase === "playing";
+  const h = state.entities.find((e) => e.kind === "healer");
 
-  // Roar cast start: rising two-tone warning.
+  // Healer spell completed: ping at the spell's pitch (you're free to recast).
+  const healerCast = h?.alive ? h.current?.def.id : undefined;
+  if (prevHealerCast && !healerCast && h?.alive && playing) {
+    beep(SPELL_PITCHES[prevHealerCast] ?? 700, 0.09);
+  }
+  prevHealerCast = healerCast;
+
+  // A spell's cooldown just cleared: a short high chime ("it's back").
+  const nowCooldowns = new Set<string>(h ? Object.keys(h.cooldowns) : []);
+  if (h?.alive && playing) {
+    for (const id of prevCooldowns) {
+      if (!nowCooldowns.has(id)) beep(1040, 0.07, "sine", 0.04);
+    }
+  }
+  prevCooldowns = nowCooldowns;
+
   const en = state.entities.find((e) => e.kind === "enemy");
+
+  // Roar (AoE) cast start: rising two-tone warning.
   const roar = !!en?.alive && en.current?.def.effect.kind === "aoe-damage";
   if (roar && !prevRoar) {
     beep(330, 0.16, "square", 0.035);
     beep(440, 0.22, "square", 0.035, 0.16);
   }
   prevRoar = roar;
+
+  // Cleave (line) cast start: descending two-tone — the healer might be hit.
+  const line = !!en?.alive && en.current?.def.effect.kind === "line-damage";
+  if (line && !prevLine) {
+    beep(415, 0.14, "square", 0.03);
+    beep(311, 0.18, "square", 0.03, 0.14);
+  }
+  prevLine = line;
 
   // Event-driven cues.
   for (const ev of state.events) {

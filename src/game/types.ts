@@ -1,9 +1,9 @@
 // Core data model for Dungeon Frenzy. Pure data — no rendering concerns here.
 
-export type EntityKind = "fighter" | "healer" | "enemy";
+export type EntityKind = "tank" | "ranger" | "mage" | "healer" | "enemy";
 
-/** Axial hex coordinate. Movement is not used yet, but the grid is real so
- * later iterations can add movement without reworking positions. */
+/** Axial hex coordinate. Movement is gone — positions are fixed — but the grid
+ * is real so the battlefield can be drawn and later iterations can re-add it. */
 export interface Hex {
   q: number;
   r: number;
@@ -11,30 +11,28 @@ export interface Hex {
 
 /** What an action is allowed to target. */
 export type Targeting =
-  | "enemy" // the single enemy (fighter attacks)
-  | "ally-single" // one chosen living party member
-  | "fighters" // both fighters (AoE heal)
-  | "party-all" // all party members (enemy AoE)
-  | "self"
-  | "hex"; // an adjacent free hex (movement)
+  | "enemy" // the single enemy (party auto-attacks)
+  | "ally-single" // one chosen living party member (single-target heals)
+  | "party-all" // all living party members (AoE heal / enemy AoE)
+  | "line"; // enemy linear hit: a primary target plus one random other
 
 export type Effect =
   | { kind: "damage"; amount: number }
   | { kind: "heal"; amount: number }
   | { kind: "hot"; perTick: number; interval: number; duration: number }
-  | { kind: "aoe-heal"; amount: number }
-  | { kind: "aoe-damage"; amount: number }
-  | { kind: "shield"; amount: number; duration: number }
-  | { kind: "move" };
+  | { kind: "aoe-heal"; amount: number } // heals all living party
+  | { kind: "aoe-damage"; amount: number } // damages all living party (enemy)
+  | { kind: "line-damage"; amount: number }; // primary + one random other
 
 export interface ActionDef {
   id: string;
   name: string;
   castTime: number; // seconds
   manaCost?: number; // undefined = free
-  /** Max hex distance to the target; undefined = unlimited. For "hex"
-   * targeting this is the move distance (1 = one hex per move). */
-  range?: number;
+  /** Post-cast lockout in seconds before this action can be cast again. The
+   * timer starts when the cast *completes*, so the effective recast interval is
+   * castTime + cooldown. undefined/0 = no cooldown. */
+  cooldown?: number;
   targeting: Targeting;
   effect: Effect;
 }
@@ -44,9 +42,10 @@ export interface ActionInstance {
   def: ActionDef;
   elapsed: number; // seconds elapsed into the cast
   targetId?: string;
-  targetHex?: Hex; // for "hex"-targeted actions (movement)
-  /** Started by the engine (fighter auto-attack), not the player. Player
-   * orders replace an auto cast immediately instead of queueing behind it. */
+  /** Line attacks pick a second victim at cast start so the telegraph can show
+   * both lines; it is re-validated when the hit lands. */
+  secondaryTargetId?: string;
+  /** Started by the engine (auto-attack), not the player. */
   auto?: boolean;
 }
 
@@ -56,12 +55,6 @@ export interface HotInstance {
   interval: number; // seconds between ticks
   duration: number; // total seconds remaining
   sinceTick: number; // seconds accumulated toward the next tick
-}
-
-/** A damage absorb (Brace). Eats up to `amount` from the next hit taken. */
-export interface ShieldInstance {
-  amount: number;
-  remaining: number; // seconds until it expires unused
 }
 
 export interface Entity {
@@ -75,14 +68,16 @@ export interface Entity {
   hex: Hex;
   current?: ActionInstance; // undefined = idle
   /** Party-only: one order banked while `current` casts. Auto-starts when the
-   * cast ends (re-validated then; dropped loudly if no longer legal). */
+   * cast ends (re-validated then; dropped loudly if no longer legal, but kept
+   * waiting if only temporarily blocked by mana/cooldown). */
   queued?: ActionInstance;
   hots: HotInstance[];
-  shield?: ShieldInstance;
+  /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready). */
+  cooldowns: Record<string, number>;
   alive: boolean;
   /** Seconds this (party) entity has been idle; 0 while casting or dead. */
   idleFor: number;
-  /** Enemy-only: counts completed actions to schedule the periodic AoE. */
+  /** Enemy-only: counts completed actions to drive the attack rotation. */
   actionCount: number;
   /** Enemy-only: true once HP drops below the enrage threshold. */
   enraged: boolean;
@@ -91,19 +86,17 @@ export interface Entity {
 /** Things that just happened, for floating combat text and other feedback.
  * The engine appends; the UI reads; old events are pruned each update. */
 export type GameEvent =
-  | { kind: "damage"; entityId: string; amount: number; blocked: number; at: number }
+  | { kind: "damage"; entityId: string; amount: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
-  | { kind: "shield"; entityId: string; amount: number; at: number }
   | { kind: "enrage"; entityId: string; at: number }
   | { kind: "queue-dropped"; entityId: string; actionName: string; at: number };
 
 /** Cumulative battle stats, shown on the end screen. */
 export interface Stats {
   damageDealt: number; // party -> enemy
-  damageTaken: number; // enemy -> party (after blocks)
+  damageTaken: number; // enemy -> party
   healingDone: number; // effective healing (excludes overheal)
   overhealing: number;
-  damageBlocked: number;
   idleSeconds: number; // summed across living party members
   deaths: number;
   /** Queued orders that were invalid by the time they would have started. */
@@ -116,19 +109,22 @@ export interface GameState {
   entities: Entity[];
   /** The battlefield is a hex disk of this radius centered on (0,0). */
   mapRadius: number;
-  selectedId?: string; // currently selected party member
-  pendingActionId?: string; // action awaiting a target click
+  /** The healer's currently armed spell, awaiting a target click. The healer is
+   * the implicit, always-the-caster unit; there is no unit-selection step. */
+  armedSpellId?: string;
   phase: GamePhase;
-  /** Sim-speed multiplier (1 = full speed). update() eases it toward the
-   * tactical-pause target; the UI reads it to show the pause cue. */
-  timeScale: number;
-  elapsedTime: number; // total *game* seconds the battle has run
+  elapsedTime: number; // total game seconds the battle has run
   events: GameEvent[];
   stats: Stats;
 }
 
-export const PARTY_KINDS: EntityKind[] = ["fighter", "healer"];
+export const PARTY_KINDS: EntityKind[] = ["tank", "ranger", "mage", "healer"];
 
 export function isParty(e: Entity): boolean {
   return e.kind !== "enemy";
+}
+
+/** A directly-damageable damage dealer (not the tank, not the healer). */
+export function isDPS(e: Entity): boolean {
+  return e.kind === "ranger" || e.kind === "mage";
 }

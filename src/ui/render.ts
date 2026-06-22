@@ -1,25 +1,13 @@
 // All canvas drawing. Reads GameState; never mutates it.
 
-import {
-  hexCorners,
-  hexesInDisk,
-  hexNeighbors,
-  type Point,
-} from "../game/hex";
-import {
-  canMoveTo,
-  enemy as findEnemy,
-  findEntity,
-  inRange,
-} from "../game/combat";
-import { MOVE_PARTY } from "../game/actions";
+import { hexCorners, hexesInDisk, type Point } from "../game/hex";
+import { enemy as findEnemy, findEntity } from "../game/combat";
 import { CONFIG } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
 import { ABILITY_KEYS, canUse, partySlots } from "./input";
 import {
   actionButtons,
-  actionsFor,
   CANVAS,
   entityCenter,
   hexCenter,
@@ -34,8 +22,10 @@ import {
 } from "./layout";
 
 const COLORS = {
-  fighter: "#5b8dd6",
-  healer: "#5bc98a",
+  tank: "#5b8dd6", // steel blue
+  ranger: "#6cc06c", // green
+  mage: "#a87fe0", // violet
+  healer: "#5bc98a", // teal-green (you)
   enemy: "#c9595b",
   dead: "#3a3f4a",
   hpFull: "#5bc98a",
@@ -44,13 +34,13 @@ const COLORS = {
   enemyHp: "#c9595b",
   cast: "#8a9bd7",
   enemyCast: "#d79a8a",
+  line: "#e8a13a", // line-attack telegraph / pip
   hot: "#5bc98a",
   mana: "#5aa9e8",
-  shield: "#7fd4f0",
-  idle: "#e8b339",
   threat: "#e05a5c",
-  selected: "#d7c08a",
+  armed: "#d7c08a",
   target: "#d7c08a",
+  cooldown: "rgba(9, 11, 16, 0.6)",
   text: "#e6e8ee",
   subtext: "#aab2c5",
   grid: "#222733",
@@ -60,21 +50,16 @@ const COLORS = {
 /** Seconds a floating combat-text entry stays on screen. */
 const FCT_LIFE = 1.1;
 
-export function render(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
+export function render(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.clearRect(0, 0, CANVAS.w, CANVAS.h);
 
   drawGrid(ctx, state);
-  drawMoveTargets(ctx, state);
   drawTelegraphs(ctx, state);
   drawEntities(ctx, state);
   drawPartyFrames(ctx, state);
   drawFloatingText(ctx, state);
   drawPanel(ctx, state);
   drawStatusBar(ctx, state);
-  if (state.phase === "playing") drawPause(ctx, state);
 
   if (state.phase !== "playing") drawOverlay(ctx, state);
 }
@@ -97,87 +82,49 @@ function drawGrid(ctx: CanvasRenderingContext2D, state: GameState): void {
   }
 }
 
-/** With a unit selected, light up the hexes it may step to — clicking one
- * orders a move directly (there is no Move button). Hidden while picking a
- * heal target so the two click modes never overlap. */
-function drawMoveTargets(
+/** A dashed threat line from the enemy to a victim, with a ring on the victim.
+ * Brightens as the cast nears completion. */
+function threatLine(
   ctx: CanvasRenderingContext2D,
-  state: GameState,
+  from: Point,
+  to: Point,
+  progress: number,
 ): void {
-  if (!state.selectedId || state.pendingActionId) return;
-  const sel = findEntity(state, state.selectedId);
-  if (!sel || !sel.alive || !isParty(sel)) return;
-
-  for (const hex of hexNeighbors(sel.hex)) {
-    if (!canMoveTo(state, sel, hex)) continue;
-    const corners = hexCorners(hexCenter(hex), HEX_SIZE - 3);
-    tracePath(ctx, corners);
-    ctx.fillStyle = "rgba(215, 192, 138, 0.12)";
-    ctx.fill();
-    ctx.strokeStyle = COLORS.target;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+  ctx.save();
+  ctx.globalAlpha = 0.3 + 0.6 * progress;
+  ctx.strokeStyle = COLORS.threat;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ring(ctx, to.x, to.y, TOKEN_RADIUS + 8, COLORS.threat, 2);
+  ctx.restore();
 }
 
-/** Show what's winding up: a line to the Claw victim, warning rings on
- * everyone while a Roar is incoming, and movement destinations. */
-function drawTelegraphs(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
-  // Anyone casting a move shows a dashed arrow to the destination hex.
-  for (const e of state.entities) {
-    if (!e.alive || e.current?.def.effect.kind !== "move" || !e.current.targetHex) {
-      continue;
-    }
-    const from = entityCenter(e);
-    const to = hexCenter(e.current.targetHex);
-    const color = e.kind === "enemy" ? COLORS.threat : COLORS.subtext;
-    ctx.save();
-    ctx.globalAlpha = 0.7;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const corners = hexCorners(to, HEX_SIZE - 6);
-    tracePath(ctx, corners);
-    ctx.stroke();
-    ctx.restore();
-  }
-
+/** Show what's winding up: a line to the Claw victim, two lines for a Cleave
+ * (the tank + one other — this is how the healer gets hit), and warning rings
+ * on everyone while a Roar (AoE) is incoming. */
+function drawTelegraphs(ctx: CanvasRenderingContext2D, state: GameState): void {
   const en = findEnemy(state);
   if (!en || !en.alive || !en.current) return;
   const inst = en.current;
   const progress = Math.min(1, inst.elapsed / inst.def.castTime);
   const c = entityCenter(en);
+  const kind = inst.def.effect.kind;
 
-  if (inst.def.effect.kind === "damage" && inst.targetId) {
-    const target = findEntity(state, inst.targetId);
-    if (!target || !target.alive) return;
-    const t = entityCenter(target);
-
-    ctx.save();
-    ctx.globalAlpha = 0.3 + 0.6 * progress;
-    ctx.strokeStyle = COLORS.threat;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([7, 5]);
-    ctx.beginPath();
-    ctx.moveTo(c.x, c.y);
-    ctx.lineTo(t.x, t.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ring(ctx, t.x, t.y, TOKEN_RADIUS + 8, COLORS.threat, 2);
-    ctx.restore();
-  }
-
-  if (inst.def.effect.kind === "aoe-damage") {
+  if (kind === "damage" && inst.targetId) {
+    const t = findEntity(state, inst.targetId);
+    if (t && t.alive) threatLine(ctx, c, entityCenter(t), progress);
+  } else if (kind === "line-damage") {
+    for (const id of [inst.targetId, inst.secondaryTargetId]) {
+      if (!id) continue;
+      const t = findEntity(state, id);
+      if (t && t.alive) threatLine(ctx, c, entityCenter(t), progress);
+    }
+  } else if (kind === "aoe-damage") {
     const pulse = 1 + Math.sin(state.elapsedTime * 8) * 0.5;
     ctx.save();
     ctx.globalAlpha = (0.3 + 0.5 * progress) * (0.6 + 0.4 * pulse);
@@ -192,45 +139,17 @@ function drawTelegraphs(
   }
 }
 
-function drawEntities(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
-  const sel = state.selectedId ? findEntity(state, state.selectedId) : undefined;
-  const pendingDef =
-    sel && state.pendingActionId
-      ? actionsFor(sel).find((a) => a.id === state.pendingActionId)
-      : undefined;
-  const slots = partySlots(state); // slot index -> select hotkey (1-based)
+function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const armed = !!state.armedSpellId;
+  const slots = partySlots(state); // slot index -> hotkey (1-based)
 
   for (const e of state.entities) {
     const c = entityCenter(e);
     const slot = slots.indexOf(e);
 
-    // Selection / valid-target highlight ring.
-    if (e.id === state.selectedId) {
-      ring(ctx, c.x, c.y, TOKEN_RADIUS + 5, COLORS.selected, 3);
-    } else if (
-      sel &&
-      pendingDef?.targeting === "ally-single" &&
-      isParty(e) &&
-      e.alive &&
-      inRange(sel, pendingDef, e)
-    ) {
+    // With a spell armed, every living ally is a legal click target.
+    if (armed && isParty(e) && e.alive) {
       ring(ctx, c.x, c.y, TOKEN_RADIUS + 5, COLORS.target, 2);
-    }
-
-    // Idle alarm: the whole game is noticing these, so make it loud.
-    if (isParty(e) && e.alive && !e.current && e.idleFor > 0.4) {
-      const pulse = Math.sin(state.elapsedTime * 7);
-      ring(ctx, c.x, c.y, TOKEN_RADIUS + 8 + pulse * 2, COLORS.idle, 3);
-      ctx.fillStyle = COLORS.idle;
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.globalAlpha = 0.65 + 0.35 * pulse;
-      ctx.fillText("IDLE!", c.x, c.y + TOKEN_RADIUS + 14);
-      ctx.globalAlpha = 1;
     }
 
     // Enraged enemy seethes.
@@ -248,11 +167,6 @@ function drawEntities(
     ctx.fillStyle = e.alive ? COLORS[e.kind] : COLORS.dead;
     ctx.fill();
 
-    // Brace shield: a tight ring hugging the token.
-    if (e.alive && e.shield) {
-      ring(ctx, c.x, c.y, TOKEN_RADIUS + 2, COLORS.shield, 3);
-    }
-
     // Label inside token.
     ctx.fillStyle = e.alive ? "#0d0f14" : "#6b7280";
     ctx.font = "bold 12px system-ui, sans-serif";
@@ -260,22 +174,18 @@ function drawEntities(
     ctx.textBaseline = "middle";
     ctx.fillText(shortName(e), c.x, c.y);
 
-    // Selection-hotkey badge for party members (1-based slot number).
+    // Target-hotkey badge for party members (1-based slot number).
     if (slot >= 0 && e.alive) {
-      ctx.fillStyle = COLORS.selected;
+      ctx.fillStyle = COLORS.armed;
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(
-        String(slot + 1),
-        c.x - TOKEN_RADIUS + 1,
-        c.y - TOKEN_RADIUS + 1,
-      );
+      ctx.fillText(String(slot + 1), c.x - TOKEN_RADIUS + 1, c.y - TOKEN_RADIUS + 1);
     }
 
     drawHpBar(ctx, e);
     if (e.maxMana > 0 && e.alive) drawManaBar(ctx, e);
-    if (e.kind === "enemy" && e.alive) drawRoarPips(ctx, e);
+    if (e.kind === "enemy" && e.alive) drawRotationIndicator(ctx, e);
     drawProgressBar(ctx, e);
 
     if (!e.alive) {
@@ -288,18 +198,14 @@ function drawEntities(
   }
 }
 
-/** Fixed unit panels on the left: HP, mana, cast + queued order, idle flash.
- * Clickable exactly like the unit's token, so healing never requires chasing
- * a moving token with the mouse or the eyes. */
+/** Fixed unit panels on the left: HP, mana, cast + queued order. Clickable
+ * exactly like the unit's token, so heal targeting never requires hunting for a
+ * token. */
 function drawPartyFrames(
   ctx: CanvasRenderingContext2D,
   state: GameState,
 ): void {
-  const sel = state.selectedId ? findEntity(state, state.selectedId) : undefined;
-  const pendingDef =
-    sel && state.pendingActionId
-      ? actionsFor(sel).find((a) => a.id === state.pendingActionId)
-      : undefined;
+  const armed = !!state.armedSpellId;
   const slots = partySlots(state);
 
   slots.forEach((e, i) => {
@@ -308,38 +214,22 @@ function drawPartyFrames(
     ctx.fillStyle = "#10131a";
     ctx.fillRect(r.x, r.y, r.w, r.h);
 
-    // Border tells the story: selected, legal heal target, idle, or calm.
+    // Border: a legal heal target (spell armed) lights up; otherwise calm.
     let border = "#333a47";
     let lw = 1;
-    let borderAlpha = 1;
-    if (e.id === state.selectedId) {
-      border = COLORS.selected;
-      lw = 2;
-    } else if (
-      sel &&
-      pendingDef?.targeting === "ally-single" &&
-      e.alive &&
-      inRange(sel, pendingDef, e)
-    ) {
+    if (armed && e.alive) {
       border = COLORS.target;
       lw = 1.5;
-    } else if (e.alive && !e.current && e.idleFor > 0.4) {
-      border = COLORS.idle;
-      lw = 2;
-      borderAlpha = 0.55 + 0.45 * Math.sin(state.elapsedTime * 7);
     }
-    ctx.save();
-    ctx.globalAlpha = borderAlpha;
     ctx.strokeStyle = border;
     ctx.lineWidth = lw;
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-    ctx.restore();
 
-    // Header: hotkey + name (+ state tag).
+    // Header: hotkey + name (+ DEAD tag).
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillStyle = COLORS.selected;
+    ctx.fillStyle = COLORS.armed;
     ctx.fillText(String(i + 1), r.x + 6, r.y + 5);
     ctx.fillStyle = e.alive ? COLORS.text : "#6b7280";
     ctx.fillText(e.name, r.x + 18, r.y + 5);
@@ -347,10 +237,6 @@ function drawPartyFrames(
       ctx.fillStyle = COLORS.hpLow;
       ctx.textAlign = "right";
       ctx.fillText("DEAD", r.x + r.w - 6, r.y + 5);
-    } else if (!e.current && e.idleFor > 0.4) {
-      ctx.fillStyle = COLORS.idle;
-      ctx.textAlign = "right";
-      ctx.fillText("IDLE", r.x + r.w - 6, r.y + 5);
     }
 
     // HP bar.
@@ -362,13 +248,9 @@ function drawPartyFrames(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = COLORS.text;
-    ctx.fillText(
-      `${Math.ceil(e.hp)}/${e.maxHp}`,
-      hp.x + hp.w / 2,
-      hp.y + hp.h / 2 + 1,
-    );
+    ctx.fillText(`${Math.ceil(e.hp)}/${e.maxHp}`, hp.x + hp.w / 2, hp.y + hp.h / 2 + 1);
 
-    // Mana strip.
+    // Mana strip (healer only).
     if (e.maxMana > 0 && e.alive) {
       const mana: Rect = { x: hp.x, y: hp.y + hp.h + 2, w: hp.w, h: 4 };
       bar(ctx, mana, "#1c2029");
@@ -406,14 +288,8 @@ function drawHpBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   const r = hpBarRect(e);
   const pct = e.maxHp > 0 ? e.hp / e.maxHp : 0;
   bar(ctx, r, "#1c2029");
-  let color: string;
-  if (e.kind === "enemy") color = COLORS.enemyHp;
-  else if (pct > 0.5) color = COLORS.hpFull;
-  else if (pct > 0.25) color = COLORS.hpMid;
-  else color = COLORS.hpLow;
-  bar(ctx, { ...r, w: r.w * pct }, color);
-  // HP number, centered inside the bar. Light text + shadow stays readable on
-  // both the colored fill and the dark empty track.
+  bar(ctx, { ...r, w: r.w * pct }, hpColor(e, pct));
+  // HP number, centered. Shadow keeps it readable on fill and empty track.
   ctx.font = "bold 9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -438,61 +314,62 @@ function drawManaBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   bar(ctx, { ...r, w: r.w * pct }, COLORS.mana);
 }
 
-/** Pips above the enemy's HP bar counting down to the next Roar: filled =
- * claws done since the last Roar; all filled = Roar is next. */
-function drawRoarPips(ctx: CanvasRenderingContext2D, e: Entity): void {
+/** Pips above the enemy's HP bar showing its attack rotation, coloured by type
+ * (salmon Claw, orange Cleave, red Roar). The current/casting slot is enlarged
+ * and ringed so the player can read what's coming. */
+function drawRotationIndicator(ctx: CanvasRenderingContext2D, e: Entity): void {
+  const rotation = CONFIG.enemy.rotation;
+  const active = e.actionCount % rotation.length;
   const hp = hpBarRect(e);
-  const total = CONFIG.enemy.aoeEveryNthAction - 1;
-  const filled = e.actionCount % CONFIG.enemy.aoeEveryNthAction;
-  const gap = 12;
-  const y = hp.y - 7;
+  const gap = 13;
+  const y = hp.y - 8;
   const cx = hp.x + hp.w / 2;
-  const startX = cx - ((total - 1) * gap) / 2;
-  for (let i = 0; i < total; i++) {
+  const startX = cx - ((rotation.length - 1) * gap) / 2;
+  rotation.forEach((slot, i) => {
+    const x = startX + i * gap;
+    const color =
+      slot === "aoe" ? COLORS.threat : slot === "line" ? COLORS.line : COLORS.enemyCast;
     ctx.beginPath();
-    ctx.arc(startX + i * gap, y, 3.5, 0, Math.PI * 2);
-    if (i < filled) {
-      ctx.fillStyle = COLORS.enemyCast;
+    ctx.arc(x, y, i === active ? 4.5 : 3, 0, Math.PI * 2);
+    if (i === active) {
+      ctx.fillStyle = color;
       ctx.fill();
+      ring(ctx, x, y, 6.5, COLORS.text, 1.5);
     } else {
-      ctx.strokeStyle = "#4a3a3a";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.restore();
     }
-  }
-  ctx.fillStyle = COLORS.subtext;
-  ctx.font = "8px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText("roar", startX + total * gap - 2, y);
+  });
 }
 
 function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   if (!e.alive) return;
   const r = progressBarRect(e);
   if (!e.current) {
-    // Idle: faint empty track only for party members (signals "needs orders").
-    if (isParty(e)) {
-      bar(ctx, r, "#1c2029");
-    }
+    if (isParty(e)) bar(ctx, r, "#1c2029");
     return;
   }
   bar(ctx, r, "#1c2029");
   const pct = Math.min(1, e.current.elapsed / e.current.def.castTime);
-  const isRoar = e.current.def.effect.kind === "aoe-damage";
+  const kind = e.current.def.effect.kind;
+  const isRoar = kind === "aoe-damage";
+  const isLine = kind === "line-damage";
   const color =
     e.kind === "enemy"
       ? isRoar
         ? COLORS.threat
-        : COLORS.enemyCast
+        : isLine
+          ? COLORS.line
+          : COLORS.enemyCast
       : COLORS.cast;
   bar(ctx, { ...r, w: r.w * pct }, color);
 
-  // Action name under the bar (with the queued order chained on).
-  ctx.fillStyle = isRoar ? COLORS.threat : COLORS.subtext;
-  ctx.font = isRoar
-    ? "bold 9px system-ui, sans-serif"
-    : "9px system-ui, sans-serif";
+  ctx.fillStyle = isRoar ? COLORS.threat : isLine ? COLORS.line : COLORS.subtext;
+  ctx.font =
+    isRoar || isLine ? "bold 9px system-ui, sans-serif" : "9px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   let label = isRoar ? `${e.current.def.name}!` : e.current.def.name;
@@ -500,7 +377,7 @@ function drawProgressBar(ctx: CanvasRenderingContext2D, e: Entity): void {
   ctx.fillText(label, r.x + r.w / 2, r.y + r.h + 2);
 }
 
-/** Floating combat text driven by sim events: damage, heals, blocks, enrage. */
+/** Floating combat text driven by sim events: damage, heals, enrage, lost orders. */
 function drawFloatingText(
   ctx: CanvasRenderingContext2D,
   state: GameState,
@@ -529,36 +406,20 @@ function drawFloatingText(
     if (!e) continue;
     const c = entityCenter(e);
     const t = age / FCT_LIFE;
-    // Deterministic per-event horizontal jitter so stacked numbers separate.
     const x = c.x + Math.sin(ev.at * 137.1) * 14;
     const y = c.y - TOKEN_RADIUS - 22 - t * 28;
     ctx.globalAlpha = 1 - t * t;
 
     if (ev.kind === "damage") {
       ctx.fillStyle = COLORS.threat;
-      if (ev.amount === 0 && ev.blocked > 0) {
-        ctx.font = "bold 12px system-ui, sans-serif";
-        ctx.fillStyle = COLORS.shield;
-        ctx.fillText("BLOCKED", x, y);
-      } else {
-        ctx.font = "bold 14px system-ui, sans-serif";
-        ctx.fillText(`-${Math.round(ev.amount)}`, x, y);
-        if (ev.blocked > 0) {
-          ctx.font = "9px system-ui, sans-serif";
-          ctx.fillStyle = COLORS.shield;
-          ctx.fillText(`(${Math.round(ev.blocked)} blocked)`, x, y + 11);
-        }
-      }
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.fillText(`-${Math.round(ev.amount)}`, x, y);
     } else if (ev.kind === "heal") {
       ctx.fillStyle = COLORS.hot;
       ctx.font = "bold 13px system-ui, sans-serif";
       ctx.fillText(`+${Math.round(ev.amount)}`, x, y);
-    } else if (ev.kind === "shield") {
-      ctx.fillStyle = COLORS.shield;
-      ctx.font = "bold 12px system-ui, sans-serif";
-      ctx.fillText("BRACED", x, y);
     } else if (ev.kind === "queue-dropped") {
-      ctx.fillStyle = COLORS.idle;
+      ctx.fillStyle = COLORS.line;
       ctx.font = "bold 12px system-ui, sans-serif";
       ctx.fillText("ORDER LOST", x, y);
     }
@@ -567,132 +428,77 @@ function drawFloatingText(
 }
 
 function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
-  // Panel background.
   ctx.fillStyle = "#10131a";
   ctx.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
   ctx.strokeStyle = "#222733";
   ctx.strokeRect(PANEL.x + 0.5, PANEL.y + 0.5, PANEL.w - 1, PANEL.h - 1);
 
-  const sel = state.selectedId
-    ? state.entities.find((e) => e.id === state.selectedId)
-    : undefined;
+  const h = state.entities.find((e) => e.kind === "healer");
 
-  if (!sel || !sel.alive) {
-    ctx.fillStyle = COLORS.subtext;
-    ctx.font = "14px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(
-      "Select a party member to choose an action.",
-      PANEL.x + PANEL.w / 2,
-      PANEL.y + PANEL.h / 2,
-    );
-    return;
-  }
-
-  const pendingDef = state.pendingActionId
-    ? actionsFor(sel).find((a) => a.id === state.pendingActionId)
-    : undefined;
-  if (pendingDef) {
-    ctx.fillStyle = COLORS.target;
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.textAlign = "center";
+  // Header: healer mana (your whole economy) + a hint.
+  if (h) {
+    ctx.fillStyle = COLORS.text;
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText(
-      "Choose a target (click a party member or press 1-3) — or click empty space to cancel.",
-      PANEL.x + PANEL.w / 2,
-      PANEL.y + 10,
-    );
-  } else {
-    ctx.fillStyle = COLORS.subtext;
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText(
-      `Click a highlighted hex to move (${MOVE_PARTY.castTime.toFixed(1)}s).`,
-      PANEL.x + PANEL.w / 2,
-      PANEL.y + 10,
-    );
-  }
-
-  // Who's selected (names no longer fit on the battlefield).
-  ctx.fillStyle = COLORS.text;
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText(sel.name, PANEL.x + 14, PANEL.y + 10);
-  if (sel.maxMana > 0) {
+    ctx.fillText("Healer", PANEL.x + 14, PANEL.y + 10);
     ctx.fillStyle = COLORS.mana;
     ctx.font = "bold 12px system-ui, sans-serif";
     ctx.fillText(
-      `Mana ${Math.floor(sel.mana)}/${sel.maxMana}`,
+      `Mana ${Math.floor(h.mana)}/${h.maxMana}`,
       PANEL.x + 14,
       PANEL.y + 28,
     );
-  }
-  if (sel.current) {
-    ctx.fillStyle = COLORS.subtext;
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText("casting — press to queue · X stops", PANEL.x + 14, PANEL.y + 46);
-  }
-  if (sel.queued) {
-    ctx.fillStyle = COLORS.mana;
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(`Next: ${sel.queued.def.name}`, PANEL.x + 14, PANEL.y + 62);
+    // A wide mana bar so the drain is impossible to miss.
+    const mb: Rect = { x: PANEL.x + 14, y: PANEL.y + 44, w: 150, h: 6 };
+    bar(ctx, mb, "#1c2029");
+    bar(ctx, { ...mb, w: mb.w * (h.mana / h.maxMana) }, COLORS.mana);
   }
 
-  actionButtons(sel).forEach((b, i) => {
-    const isPending = state.pendingActionId === b.def.id;
+  const armedDef = state.armedSpellId
+    ? HEALER_SPELL(state.armedSpellId)
+    : undefined;
+  ctx.fillStyle = armedDef ? COLORS.armed : COLORS.subtext;
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(
+    armedDef
+      ? `${armedDef.name} armed — click an ally (or press 1-4) to cast · re-press for lowest HP`
+      : "Pick a spell (Q W E R or click), then click an ally to heal.",
+    PANEL.x + PANEL.w / 2,
+    PANEL.y + 10,
+  );
+
+  actionButtons().forEach((b, i) => {
+    const armed = state.armedSpellId === b.def.id;
     const hotkey = ABILITY_KEYS[i]?.toUpperCase();
-    button(
-      ctx,
-      b.rect,
-      b.def.name,
-      buttonSub(b.def),
-      isPending,
-      hotkey,
-      !canUse(state, sel, b.def),
-      sel.queued?.def.id === b.def.id,
-    );
+    const total = b.def.cooldown ?? 0;
+    const remain = h ? h.cooldowns[b.def.id] ?? 0 : 0;
+    const cdFrac = total > 0 ? Math.max(0, Math.min(1, remain / total)) : 0;
+    button(ctx, b.rect, b.def.name, buttonSub(b.def), armed, hotkey, {
+      disabled: !canUse(state, b.def),
+      queued: h?.queued?.def.id === b.def.id,
+      cdFrac,
+      cdRemain: remain,
+    });
   });
+}
+
+/** Look up a healer spell def by id (for the armed-spell label). */
+function HEALER_SPELL(id: string): ActionDef | undefined {
+  return actionButtons().find((b) => b.def.id === id)?.def;
 }
 
 function buttonSub(def: ActionDef): string {
   const parts = [`${def.castTime.toFixed(1)}s`];
-  if (def.manaCost !== undefined) parts.push(`${def.manaCost} mana`);
-  if (def.targeting === "enemy") parts.push("melee");
+  if (def.manaCost !== undefined) parts.push(`${def.manaCost} mp`);
+  if (def.cooldown) parts.push(`${def.cooldown.toFixed(1)}s cd`);
+  if (def.effect.kind === "aoe-heal") parts.push("all");
   return parts.join(" · ");
 }
 
-/** Tactical-pause cue: a cool vignette over the battlefield plus a PAUSED
- * tag, both fading with how far the clock is dialed down so the ease in/out
- * reads on screen instead of feeling like lag. */
-function drawPause(ctx: CanvasRenderingContext2D, state: GameState): void {
-  const span = 1 - CONFIG.time.pausedScale;
-  const strength = Math.min(1, Math.max(0, (1 - state.timeScale) / span));
-  if (strength < 0.02) return;
-
-  const cx = PANEL.x + PANEL.w / 2;
-  const cy = PANEL.y / 2;
-  const g = ctx.createRadialGradient(cx, cy, PANEL.y * 0.45, cx, cy, PANEL.y);
-  g.addColorStop(0, "rgba(90, 169, 232, 0)");
-  g.addColorStop(1, `rgba(90, 169, 232, ${0.22 * strength})`);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, CANVAS.w, PANEL.y);
-
-  ctx.globalAlpha = strength;
-  ctx.fillStyle = COLORS.mana;
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillText("◷ PAUSED — issue an order or press Esc to resume", cx, 12);
-  ctx.globalAlpha = 1;
-}
-
-function drawStatusBar(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-): void {
+function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.fillStyle = COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
@@ -701,7 +507,7 @@ function drawStatusBar(
 
   ctx.textAlign = "right";
   ctx.fillText(
-    "1-3 select · Q-T abilities (press while casting to queue) · X stop cast · Esc cancel · M mute",
+    "Q W E R / click a spell · 1-4 / click an ally to cast · re-press = smart-cast · X stop · Esc clear · M mute",
     CANVAS.w - 12,
     12,
   );
@@ -727,15 +533,13 @@ function drawOverlay(ctx: CanvasRenderingContext2D, state: GameState): void {
       "Healing done",
       `${Math.round(s.healingDone)} (${Math.round(s.overhealing)} overheal)`,
     ],
-    ["Damage blocked", `${Math.round(s.damageBlocked)}`],
-    ["Party idle time", `${s.idleSeconds.toFixed(1)}s`],
     ["Orders lost", `${s.ordersDropped}`],
     ["Deaths", `${s.deaths}`],
   ];
 
   ctx.font = "16px system-ui, sans-serif";
   lines.forEach(([label, value], i) => {
-    const y = 220 + i * 28;
+    const y = 230 + i * 28;
     ctx.fillStyle = COLORS.subtext;
     ctx.textAlign = "right";
     ctx.fillText(label, cx - 12, y);
@@ -772,20 +576,27 @@ function ring(
   ctx.stroke();
 }
 
+interface ButtonState {
+  disabled?: boolean;
+  queued?: boolean;
+  cdFrac?: number; // 0..1 fraction of cooldown remaining
+  cdRemain?: number; // seconds of cooldown remaining
+}
+
 function button(
   ctx: CanvasRenderingContext2D,
   r: Rect,
   title: string,
   sub: string,
-  active: boolean,
-  hotkey?: string,
-  disabled?: boolean,
-  queued?: boolean,
+  armed: boolean,
+  hotkey: string | undefined,
+  st: ButtonState,
 ): void {
-  ctx.fillStyle = disabled ? "#13161c" : active ? "#2a2f1a" : "#1b2029";
+  const { disabled, queued, cdFrac = 0, cdRemain = 0 } = st;
+  ctx.fillStyle = disabled ? "#13161c" : armed ? "#2a2f1a" : "#1b2029";
   ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = active ? COLORS.selected : queued ? COLORS.mana : "#333a47";
-  ctx.lineWidth = active || queued ? 2 : 1;
+  ctx.strokeStyle = armed ? COLORS.armed : queued ? COLORS.mana : "#333a47";
+  ctx.lineWidth = armed || queued ? 2 : 1;
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
 
   if (queued) {
@@ -806,18 +617,37 @@ function button(
   ctx.font = "11px system-ui, sans-serif";
   ctx.fillText(sub, r.x + r.w / 2, r.y + r.h / 2 + 12);
 
-  // Hotkey badge in the top-left corner.
   if (hotkey) {
-    ctx.fillStyle = disabled ? "#4a5160" : COLORS.selected;
+    ctx.fillStyle = disabled ? "#4a5160" : COLORS.armed;
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText(hotkey, r.x + 7, r.y + 5);
   }
+
+  // Cooldown wipe + remaining seconds, drawn last so it sits on top.
+  if (cdFrac > 0) {
+    ctx.fillStyle = COLORS.cooldown;
+    ctx.fillRect(r.x + 1, r.y + 1, r.w - 2, (r.h - 2) * cdFrac);
+    ctx.fillStyle = COLORS.text;
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(cdRemain.toFixed(1), r.x + r.w / 2, r.y + r.h / 2);
+  }
 }
 
 function shortName(e: Entity): string {
-  if (e.kind === "fighter") return e.id.endsWith("a") ? "F1" : "F2";
-  if (e.kind === "healer") return "H";
-  return "E";
+  switch (e.kind) {
+    case "tank":
+      return "TK";
+    case "ranger":
+      return "RG";
+    case "mage":
+      return "MG";
+    case "healer":
+      return "H";
+    default:
+      return "E";
+  }
 }
