@@ -1,230 +1,116 @@
-// Headless balance check: scripted "players" of varying skill drive the sim.
+// Headless balance check: scripted "healers" of varying skill drive the sim.
+// The tank/ranger/mage auto-attack on their own; the bot only plays the healer.
 // Run: npx -y tsx scripts/sim-playtest.ts
 
-import {
-  createInitialState,
-  issueOrder,
-  startAction,
-  update,
-} from "../src/game/engine.ts";
+import { createInitialState, issueOrder, update } from "../src/game/engine.ts";
 import {
   AOE_HEAL,
   FAST_HEAL,
-  FIGHTER_ATTACK,
-  FIGHTER_BRACE,
-  FIGHTER_HEAVY,
-  HEAL_OVER_TIME,
-  MOVE_PARTY,
+  RENEW,
   SLOW_HEAL,
 } from "../src/game/actions.ts";
-import { canMoveTo, enemy, inRange, livingParty } from "../src/game/combat.ts";
-import { hexDistance, hexNeighbors } from "../src/game/hex.ts";
-import type { Entity, GameState, Hex } from "../src/game/types.ts";
+import { enemy, livingParty } from "../src/game/combat.ts";
+import type { ActionDef, Entity, GameState } from "../src/game/types.ts";
+import { isParty } from "../src/game/types.ts";
 
 type Bot = (state: GameState) => void;
 
-/** Order a one-hex move that gets `e` closer to `goal` (if possible). */
-function moveToward(state: GameState, e: Entity, goal: Hex): void {
-  const options = hexNeighbors(e.hex).filter((h) => canMoveTo(state, e, h));
-  if (options.length === 0) return;
-  let best = options[0];
-  for (const h of options) {
-    if (hexDistance(h, goal) < hexDistance(best, goal)) best = h;
-  }
-  if (hexDistance(best, goal) < hexDistance(e.hex, goal)) {
-    startAction(state, e.id, MOVE_PARTY, undefined, best);
-  }
+function healer(state: GameState): Entity | undefined {
+  return state.entities.find((e) => e.kind === "healer");
 }
 
-/** Order a one-hex move that gets `e` farther from `threat` (if possible). */
-function moveAway(state: GameState, e: Entity, threat: Hex): void {
-  const options = hexNeighbors(e.hex).filter((h) => canMoveTo(state, e, h));
-  let best: Hex | undefined;
-  for (const h of options) {
-    if (hexDistance(h, threat) > hexDistance(e.hex, threat)) {
-      if (!best || hexDistance(h, threat) > hexDistance(best, threat)) best = h;
-    }
-  }
-  if (best) startAction(state, e.id, MOVE_PARTY, undefined, best);
+/** Off cooldown AND affordable right now. */
+function ready(h: Entity, def: ActionDef): boolean {
+  return (h.cooldowns[def.id] ?? 0) <= 0 && h.mana >= (def.manaCost ?? 0);
 }
 
-/** Reasonable player: fighters close to melee and wall the enemy (Brace when
- * a Roar is casting), healer stays in range, flees adjacency, and triages
- * with Slow Heal / Renew / Fast Heal. */
+/** The triage decision shared by the smart and queue bots: what to cast on whom
+ * given current readiness. Models a mana-conscious player — it leans on the
+ * efficient heals (Renew/Slow/Group) and spends the inefficient Fast Heal only
+ * on true emergencies or when mana is comfortable. Returns undefined to bank. */
+function triage(
+  state: GameState,
+  h: Entity,
+): { def: ActionDef; targetId: string } | undefined {
+  const party = livingParty(state);
+  const lowMana = h.mana < h.maxMana * 0.35;
+  const hurt = party
+    .map((p) => ({ p, missing: p.maxHp - p.hp, pct: p.hp / p.maxHp }))
+    .sort((a, b) => a.pct - b.pct);
+  const worst = hurt[0];
+  if (!worst || worst.missing === 0) return undefined;
+
+  // 1. Emergency: someone about to die -> Fast Heal regardless of mana.
+  if (worst.pct < 0.3 && ready(h, FAST_HEAL)) {
+    return { def: FAST_HEAL, targetId: worst.p.id };
+  }
+  // 2. Keep Renew rolling on the tank (cheap, efficient anchor).
+  const tank = party.find((p) => p.kind === "tank");
+  if (tank && tank.maxHp - tank.hp >= 14 && tank.hots.length === 0 && ready(h, RENEW)) {
+    return { def: RENEW, targetId: tank.id };
+  }
+  // 3. Group heal when several are hurt (efficient multi-target — after a Roar).
+  if (hurt.filter((x) => x.missing >= 16).length >= 3 && ready(h, AOE_HEAL)) {
+    return { def: AOE_HEAL, targetId: worst.p.id };
+  }
+  // 4. Big single deficit -> Slow Heal (the efficient workhorse).
+  if (worst.missing >= 38 && ready(h, SLOW_HEAL)) {
+    return { def: SLOW_HEAL, targetId: worst.p.id };
+  }
+  // 5. Moderate deficit -> Fast Heal, but only while mana is comfortable so we
+  //    don't burn the inefficient heal during a conservation phase.
+  if (!lowMana && worst.pct < 0.6 && ready(h, FAST_HEAL)) {
+    return { def: FAST_HEAL, targetId: worst.p.id };
+  }
+  return undefined; // otherwise bank mana / let Renew + HP buffers ride
+}
+
+/** Reasonable player: cooldown-aware triage on the healer. */
 const smartBot: Bot = (state) => {
-  const en = enemy(state);
-  if (!en || !en.alive) return;
-  const roarIncoming = en.current?.def.effect.kind === "aoe-damage";
+  const h = healer(state);
+  if (!h || !h.alive || h.current) return;
+  const order = triage(state, h);
+  if (order) issueOrder(state, h.id, order.def, order.targetId);
+};
 
-  for (const e of state.entities) {
-    if (e.kind !== "fighter" || !e.alive || e.current) continue;
-    if (hexDistance(e.hex, en.hex) > 1) {
-      moveToward(state, e, en.hex);
-    } else if (roarIncoming && !e.shield) {
-      startAction(state, e.id, FIGHTER_BRACE);
-    } else {
-      startAction(state, e.id, FIGHTER_HEAVY);
-    }
-  }
-
-  const healer = state.entities.find((e) => e.kind === "healer");
-  if (healer && healer.alive && !healer.current) {
-    // Never stand next to the ogre.
-    if (hexDistance(healer.hex, en.hex) <= 1) {
-      moveAway(state, healer, en.hex);
-      return;
-    }
+/** Queue-using player: same triage, but banks the next order while casting
+ * (mana/cooldown may clear by promotion). Measures the 1-slot queue's slack. */
+const queueBot: Bot = (state) => {
+  const h = healer(state);
+  if (!h || !h.alive) return;
+  if (!h.current) {
+    const order = triage(state, h);
+    if (order) issueOrder(state, h.id, order.def, order.targetId);
+  } else if (!h.queued) {
+    // Bank a big efficient heal on the most-wounded for when this cast ends.
     const hurt = livingParty(state)
       .map((p) => ({ p, missing: p.maxHp - p.hp }))
-      .sort((a, b) => b.missing - a.missing);
-    const worst = hurt[0];
-    if (!worst || worst.missing === 0) return;
-    if (!inRange(healer, FAST_HEAL, worst.p)) {
-      moveToward(state, healer, worst.p.hex);
-      return;
-    }
-    const pct = worst.p.hp / worst.p.maxHp;
-    if (pct < 0.3 && healer.mana >= (FAST_HEAL.manaCost ?? 0)) {
-      startAction(state, healer.id, FAST_HEAL, worst.p.id);
-    } else if (worst.missing >= 35 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
-      startAction(state, healer.id, SLOW_HEAL, worst.p.id);
-    } else if (
-      worst.missing >= 20 &&
-      worst.p.hots.length === 0 &&
-      healer.mana >= (HEAL_OVER_TIME.manaCost ?? 0)
-    ) {
-      startAction(state, healer.id, HEAL_OVER_TIME, worst.p.id);
-    } else if (worst.missing >= 14 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
-      startAction(state, healer.id, SLOW_HEAL, worst.p.id);
-    }
-    // Otherwise: sit on mana (small deficits aren't worth casts).
+      .sort((a, b) => b.missing - a.missing)[0];
+    if (hurt && hurt.missing >= 45) issueOrder(state, h.id, SLOW_HEAL, hurt.p.id);
   }
 };
 
-/** Sloppy player: fighters walk in and spam basic Attack, healer spams Fast
- * Heal on the most hurt target, never braces, never repositions sensibly. */
+/** Sloppy player: spams Fast Heal on the most-hurt. Inefficient -> should run
+ * dry and lose, guarding the invariant that there is no infinite sustain. */
 const sloppyBot: Bot = (state) => {
-  const en = enemy(state);
-  if (!en || !en.alive) return;
-  for (const e of state.entities) {
-    if (e.kind !== "fighter" || !e.alive || e.current) continue;
-    if (hexDistance(e.hex, en.hex) > 1) moveToward(state, e, en.hex);
-    else startAction(state, e.id, FIGHTER_ATTACK);
-  }
-  const healer = state.entities.find((e) => e.kind === "healer");
-  if (healer && healer.alive && !healer.current) {
-    const hurt = livingParty(state)
-      .filter((p) => p.hp < p.maxHp)
-      .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
-    if (hurt[0] && healer.mana >= (FAST_HEAL.manaCost ?? 0)) {
-      if (inRange(healer, FAST_HEAL, hurt[0])) {
-        startAction(state, healer.id, FAST_HEAL, hurt[0].id);
-      } else {
-        moveToward(state, healer, hurt[0].hex);
-      }
-    }
-  }
+  const h = healer(state);
+  if (!h || !h.alive || h.current) return;
+  const worst = livingParty(state)
+    .filter((p) => p.hp < p.maxHp)
+    .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+  if (worst && ready(h, FAST_HEAL)) issueOrder(state, h.id, FAST_HEAL, worst.id);
 };
 
-/** AFK player: nobody does anything. Should lose. */
+/** AFK player: never heals. The party auto-attacks but wipes. Must lose. */
 const afkBot: Bot = () => {};
-
-/** Queue-using player: same strategy as smartBot but banks the next order
- * while casting (issueOrder) and stop-casts into Brace when a Roar threatens
- * mid-Heavy-Swing. Measures how much slack the 1-slot queue grants. */
-const queueBot: Bot = (state) => {
-  const en = enemy(state);
-  if (!en || !en.alive) return;
-  const roarIncoming = en.current?.def.effect.kind === "aoe-damage";
-
-  for (const e of state.entities) {
-    if (e.kind !== "fighter" || !e.alive) continue;
-    if (hexDistance(e.hex, en.hex) > 1) {
-      if (!e.current) moveToward(state, e, en.hex);
-      continue;
-    }
-    // Same brace policy as smartBot (brace only when idle) so the queue's
-    // effect is measured with strategy held constant.
-    if (!e.current) {
-      issueOrder(
-        state,
-        e.id,
-        roarIncoming && !e.shield ? FIGHTER_BRACE : FIGHTER_HEAVY,
-      );
-    } else if (!e.queued) {
-      issueOrder(state, e.id, FIGHTER_HEAVY);
-    }
-  }
-
-  const healer = state.entities.find((e) => e.kind === "healer");
-  if (!healer || !healer.alive) return;
-  if (!healer.current && hexDistance(healer.hex, en.hex) <= 1) {
-    moveAway(state, healer, en.hex);
-    return;
-  }
-  const hurt = livingParty(state)
-    .map((p) => ({ p, missing: p.maxHp - p.hp }))
-    .sort((a, b) => b.missing - a.missing);
-  const worst = hurt[0];
-  if (!worst || worst.missing === 0) return;
-  if (!healer.current) {
-    if (!inRange(healer, FAST_HEAL, worst.p)) {
-      moveToward(state, healer, worst.p.hex);
-      return;
-    }
-    const pct = worst.p.hp / worst.p.maxHp;
-    if (pct < 0.3 && healer.mana >= (FAST_HEAL.manaCost ?? 0)) {
-      issueOrder(state, healer.id, FAST_HEAL, worst.p.id);
-    } else if (worst.missing >= 35 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
-      issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
-    } else if (
-      worst.missing >= 20 &&
-      worst.p.hots.length === 0 &&
-      healer.mana >= (HEAL_OVER_TIME.manaCost ?? 0)
-    ) {
-      issueOrder(state, healer.id, HEAL_OVER_TIME, worst.p.id);
-    } else if (worst.missing >= 14 && healer.mana >= (SLOW_HEAL.manaCost ?? 0)) {
-      issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
-    }
-  } else if (!healer.queued && worst.missing >= 35) {
-    // Bank the next big heal while this one casts (mana may regen by then).
-    issueOrder(state, healer.id, SLOW_HEAL, worst.p.id);
-  }
-};
-
-/** Degenerate queue spammer: keeps Fast Heal banked forever and basic-attacks.
- * Must still lose (mana exhaustion + dropped orders) — guards the invariant
- * that the queue doesn't grant infinite sustain. */
-const queueSloppyBot: Bot = (state) => {
-  const en = enemy(state);
-  if (!en || !en.alive) return;
-  for (const e of state.entities) {
-    if (e.kind !== "fighter" || !e.alive) continue;
-    if (hexDistance(e.hex, en.hex) > 1) {
-      if (!e.current) moveToward(state, e, en.hex);
-    } else if (!e.current || !e.queued) {
-      issueOrder(state, e.id, FIGHTER_ATTACK);
-    }
-  }
-  const healer = state.entities.find((e) => e.kind === "healer");
-  if (healer && healer.alive) {
-    const hurt = livingParty(state)
-      .filter((p) => p.hp < p.maxHp)
-      .sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
-    if (hurt[0]) {
-      if (!healer.current && !inRange(healer, FAST_HEAL, hurt[0])) {
-        moveToward(state, healer, hurt[0].hex);
-      } else if (!healer.current || !healer.queued) {
-        issueOrder(state, healer.id, FAST_HEAL, hurt[0].id);
-      }
-    }
-  }
-};
 
 interface RunResult {
   state: GameState;
-  healerClawDamage: number; // single-target damage the healer took
-  healerRoarDamage: number;
+  healerLine: number; // line (cleave) damage taken by the healer
+  healerAoe: number; // roar/aoe damage taken by the healer
+  healerClaw: number; // single-target damage taken by the healer
+  starvation: number | null; // first time mana hit ~empty
+  enrage: number | null; // time the enemy enraged
 }
 
 function runOne(bot: Bot, reactionDelay: number): RunResult {
@@ -232,8 +118,12 @@ function runOne(bot: Bot, reactionDelay: number): RunResult {
   const dt = 0.05;
   let sinceOrder = 0;
   let lastScan = 0;
-  let healerClawDamage = 0;
-  let healerRoarDamage = 0;
+  let healerLine = 0;
+  let healerAoe = 0;
+  let healerClaw = 0;
+  let starvation: number | null = null;
+  let enrage: number | null = null;
+
   while (state.phase === "playing" && state.elapsedTime < 600) {
     sinceOrder += dt;
     if (sinceOrder >= reactionDelay) {
@@ -241,23 +131,34 @@ function runOne(bot: Bot, reactionDelay: number): RunResult {
       sinceOrder = 0;
     }
     update(state, dt);
-    // Attribute fresh damage events on the healer: Roar hits everyone in the
-    // same instant as a fighter, Claw doesn't.
+
+    const h = healer(state);
+    // "Starved" = can no longer afford even the cheapest heal (Fast Heal).
+    if (starvation === null && h && h.alive && h.mana < (FAST_HEAL.manaCost ?? 0)) {
+      starvation = state.elapsedTime;
+    }
+    const en = enemy(state);
+    if (enrage === null && en && en.enraged) enrage = state.elapsedTime;
+
+    // Attribute fresh damage on the healer by how many allies were hit at the
+    // same instant: all -> Roar, two -> Cleave, one -> Claw.
     for (const ev of state.events) {
-      if (ev.at <= lastScan || ev.kind !== "damage") continue;
-      if (ev.entityId !== "healer") continue;
-      const sharedWithFighter = state.events.some(
+      if (ev.at <= lastScan || ev.kind !== "damage" || ev.entityId !== "healer") {
+        continue;
+      }
+      const sharedCount = state.events.filter(
         (o) =>
           o.kind === "damage" &&
           o.at === ev.at &&
-          o.entityId.startsWith("fighter"),
-      );
-      if (sharedWithFighter) healerRoarDamage += ev.amount + ev.blocked;
-      else healerClawDamage += ev.amount + ev.blocked;
+          isParty(state.entities.find((e) => e.id === o.entityId) ?? ({} as Entity)),
+      ).length;
+      if (sharedCount >= 3) healerAoe += ev.amount;
+      else if (sharedCount === 2) healerLine += ev.amount;
+      else healerClaw += ev.amount;
     }
     lastScan = state.elapsedTime;
   }
-  return { state, healerClawDamage, healerRoarDamage };
+  return { state, healerLine, healerAoe, healerClaw, starvation, enrage };
 }
 
 function summarize(name: string, bot: Bot, reactionDelay: number): void {
@@ -266,9 +167,14 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
   let totalTime = 0;
   let totalDeaths = 0;
   let timeouts = 0;
-  let clawOnHealer = 0;
-  let roarOnHealer = 0;
+  let line = 0;
+  let aoe = 0;
+  let claw = 0;
   let drops = 0;
+  let starvSum = 0;
+  let starvN = 0;
+  let enrageSum = 0;
+  let enrageN = 0;
   for (let i = 0; i < runs; i++) {
     const r = runOne(bot, reactionDelay);
     if (r.state.phase === "won") {
@@ -277,25 +183,80 @@ function summarize(name: string, bot: Bot, reactionDelay: number): void {
     }
     if (r.state.phase === "playing") timeouts++;
     totalDeaths += r.state.stats.deaths;
-    clawOnHealer += r.healerClawDamage;
-    roarOnHealer += r.healerRoarDamage;
+    line += r.healerLine;
+    aoe += r.healerAoe;
+    claw += r.healerClaw;
     drops += r.state.stats.ordersDropped;
+    if (r.starvation !== null) {
+      starvSum += r.starvation;
+      starvN++;
+    }
+    if (r.enrage !== null) {
+      enrageSum += r.enrage;
+      enrageN++;
+    }
   }
   const avgTime = wins ? (totalTime / wins).toFixed(1) : "-";
+  const avgStarv = starvN ? (starvSum / starvN).toFixed(0) : "-";
+  const avgEnrage = enrageN ? (enrageSum / enrageN).toFixed(0) : "-";
   console.log(
-    `${name.padEnd(28)} win ${((wins / runs) * 100).toFixed(0).padStart(3)}%  ` +
-      `avg kill ${avgTime}s  avg deaths ${(totalDeaths / runs).toFixed(2)}  ` +
-      `healer dmg claw/roar ${(clawOnHealer / runs).toFixed(1)}/${(roarOnHealer / runs).toFixed(1)}  ` +
+    `${name.padEnd(26)} win ${((wins / runs) * 100).toFixed(0).padStart(3)}%  ` +
+      `kill ${String(avgTime).padStart(5)}s  deaths ${(totalDeaths / runs).toFixed(2)}  ` +
+      `OOM@${String(avgStarv).padStart(3)}s enrage@${String(avgEnrage).padStart(3)}s  ` +
+      `healer L/A/C ${(line / runs).toFixed(0)}/${(aoe / runs).toFixed(0)}/${(claw / runs).toFixed(0)}  ` +
       `drops ${(drops / runs).toFixed(1)}` +
       (timeouts ? `  TIMEOUTS ${timeouts}` : ""),
   );
 }
 
-summarize("smart, 0.3s reactions", smartBot, 0.3);
-summarize("smart, 1.0s reactions", smartBot, 1.0);
-summarize("smart, 2.0s reactions", smartBot, 2.0);
-summarize("queue, 1.0s reactions", queueBot, 1.0);
-summarize("queue, 2.0s reactions", queueBot, 2.0);
-summarize("queue-sloppy, 1.0s", queueSloppyBot, 1.0);
-summarize("sloppy, 0.5s reactions", sloppyBot, 0.5);
+/** Single annotated run: a timeline of HP / mana / enemy HP, plus deaths, so we
+ * can see whether the tank or squishies fall and where mana goes. */
+function debugRun(bot: Bot, reactionDelay: number): void {
+  const state = createInitialState();
+  const dt = 0.05;
+  let sinceOrder = 0;
+  let nextLog = 0;
+  const dead = new Set<string>();
+  const hp = (id: string) => {
+    const e = state.entities.find((x) => x.id === id)!;
+    return `${Math.round(e.hp)}`.padStart(3);
+  };
+  while (state.phase === "playing" && state.elapsedTime < 200) {
+    sinceOrder += dt;
+    if (sinceOrder >= reactionDelay) {
+      bot(state);
+      sinceOrder = 0;
+    }
+    update(state, dt);
+    for (const e of state.entities) {
+      if (!e.alive && isParty(e) && !dead.has(e.id)) {
+        dead.add(e.id);
+        console.log(`  t=${state.elapsedTime.toFixed(1)}s  DEATH: ${e.name}`);
+      }
+    }
+    if (state.elapsedTime >= nextLog) {
+      const h = healer(state)!;
+      const en = enemy(state)!;
+      console.log(
+        `t=${state.elapsedTime.toFixed(0).padStart(3)}s  enemy ${Math.round(en.hp).toString().padStart(4)}${en.enraged ? "*" : " "}  ` +
+          `mana ${Math.round(h.mana).toString().padStart(3)}  ` +
+          `TK ${hp("tank")} RG ${hp("ranger")} MG ${hp("mage")} H ${hp("healer")}`,
+      );
+      nextLog += 5;
+    }
+  }
+  console.log(`  -> ${state.phase} at ${state.elapsedTime.toFixed(1)}s\n`);
+}
+
+if (process.argv[2] === "debug") {
+  debugRun(smartBot, 0.3);
+  process.exit(0);
+}
+
+summarize("smart, 0.3s", smartBot, 0.3);
+summarize("smart, 1.0s", smartBot, 1.0);
+summarize("smart, 2.0s", smartBot, 2.0);
+summarize("queue, 1.0s", queueBot, 1.0);
+summarize("queue, 2.0s", queueBot, 2.0);
+summarize("sloppy, 0.4s", sloppyBot, 0.4);
 summarize("afk", afkBot, 1.0);
