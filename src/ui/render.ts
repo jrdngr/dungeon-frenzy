@@ -15,6 +15,7 @@ import {
   actionButtons,
   areaCardRect,
   CANVAS,
+  castBarRect,
   entityCenter,
   entityRadius,
   HEX_SIZE,
@@ -243,7 +244,8 @@ function drawEntities(ctx: CanvasRenderingContext2D, state: GameState): void {
       drawHpBar(ctx, state, e);
       if (e.maxMana > 0) drawManaBar(ctx, state, e);
       if (e.kind === "enemy" && isBossType(e.enemyType)) drawRotationIndicator(ctx, state, e);
-      drawProgressBar(ctx, state, e);
+      // The healer's cast progress is shown in the bottom panel instead (drawHealerCastBar).
+      if (e.kind !== "healer") drawProgressBar(ctx, state, e);
       drawCurseMark(ctx, state, e);
     } else if (isParty(e)) {
       ctx.fillStyle = COLORS.hpLow;
@@ -530,6 +532,8 @@ function drawPanel(
     PANEL.y + 10,
   );
 
+  drawHealerCastBar(ctx, state);
+
   actionButtons().forEach((b, i) => {
     const armed = state.armedSpellId === b.def.id;
     const hotkey = ABILITY_KEYS[i]?.toUpperCase();
@@ -544,6 +548,38 @@ function drawPanel(
   });
 
   drawQuitButton(ctx, mouse);
+}
+
+/** The healer's cast-progress bar, centered above the spell buttons. Mirrors the
+ * per-token cast bar (now removed from the healer): empty track when idle, filled
+ * with the spell name + remaining time while casting. */
+function drawHealerCastBar(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const h = state.entities.find((e) => e.kind === "healer");
+  if (!h) return;
+  const r = castBarRect();
+  bar(ctx, r, "#1c2029");
+  ctx.strokeStyle = "#333a47";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+  if (h.alive && h.current) {
+    const pct = Math.min(1, h.current.elapsed / h.current.def.castTime);
+    bar(ctx, { ...r, w: r.w * pct }, COLORS.cast);
+    const remain = Math.max(0, h.current.def.castTime - h.current.elapsed);
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = COLORS.text;
+    ctx.textAlign = "left";
+    ctx.fillText(h.current.def.name, r.x + 8, r.y + r.h / 2 + 1);
+    ctx.textAlign = "right";
+    ctx.fillText(`${remain.toFixed(1)}s`, r.x + r.w - 8, r.y + r.h / 2 + 1);
+  } else {
+    ctx.fillStyle = COLORS.subtext;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(h.alive ? "not casting" : "—", r.x + r.w / 2, r.y + r.h / 2 + 1);
+  }
 }
 
 /** "Quit Area" button: abandon the run and go back to the hub (no progress kept). */

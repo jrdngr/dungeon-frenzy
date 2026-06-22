@@ -111,6 +111,14 @@ export function actionButtons(): ActionButton[] {
   }));
 }
 
+/** Healer cast-progress bar, centered in the bottom panel just above the spell
+ * buttons (mirrors the per-token cast bar that used to sit under the healer). */
+export function castBarRect(): Rect {
+  const w = 460;
+  const h = 16;
+  return { x: PANEL.x + (PANEL.w - w) / 2, y: PANEL.y + 28, w, h };
+}
+
 /** "Quit area" button in the bottom panel (right of the spells): abandons the
  * current run and returns to the hub with no progress recorded. */
 export function quitButtonRect(): Rect {

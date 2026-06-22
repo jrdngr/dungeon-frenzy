@@ -68,8 +68,9 @@ export const CONFIG = {
   enemyTypes: {
     // Small enemies — die fast; pressure comes from their numbers. They mirror the
     // area boss's base attacks (claw, later light line). Never enrage.
-    // Imps hit hard (12, doubled from 6): area 1's first two fights are a sharp opener.
-    a1small: { name: "Imp", maxHp: 60, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 12 } } },
+    // Imps hit hard (12, doubled from 6) and are tanky (120 HP, doubled): area 1's
+    // first two fights are a sharp opener. a1small is only used in those two fights.
+    a1small: { name: "Imp", maxHp: 120, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 12 } } },
     a2small: { name: "Kobold", maxHp: 75, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 7 } } },
     a3small: { name: "Gnoll", maxHp: 90, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 8 } } },
     a4small: { name: "Marauder", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 9 }, line: { castTime: 3.2, damage: 6 } } },
