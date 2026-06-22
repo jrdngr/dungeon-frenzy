@@ -114,7 +114,7 @@ export function handleKey(
     return { restart: false };
   }
 
-  // Ability keys arm (or smart-cast) the healer's spells, left to right.
+  // Ability keys arm the healer's spells, left to right.
   const idx = ABILITY_KEYS.indexOf(key);
   if (idx >= 0) {
     const def = HEALER_ACTIONS[idx];
@@ -133,27 +133,13 @@ function castOnTarget(state: GameState, ally: Entity): void {
   if (def) issueOrder(state, h.id, def, ally.id);
 }
 
-/** Smart-cast target: lowest HP-fraction living party member missing HP. */
-function smartCastTarget(state: GameState): Entity | undefined {
-  let best: Entity | undefined;
-  for (const e of state.entities) {
-    if (!isParty(e) || !e.alive || e.hp >= e.maxHp) continue;
-    if (!best || e.hp / e.maxHp < best.hp / best.maxHp) best = e;
-  }
-  return best;
-}
-
 function onSpellButton(state: GameState, def: ActionDef): void {
   const h = healerOf(state);
   if (!h || !h.alive) return;
 
   if (!canUse(state, def)) return; // button renders greyed out
 
-  if (state.armedSpellId === def.id) {
-    // Smart-cast: re-press fires on the most-wounded ally. Stays armed.
-    const target = smartCastTarget(state);
-    if (target) issueOrder(state, h.id, def, target.id);
-  } else {
-    state.armedSpellId = def.id; // arm it (sticky until Esc or another spell)
-  }
+  // Arm the spell (sticky until Esc or another spell). Re-pressing the armed
+  // spell is a no-op; you must click an ally or press 1-4 to cast.
+  state.armedSpellId = def.id;
 }

@@ -222,11 +222,9 @@ Three loads, three tools:
 
 ### Execution load → fewer inputs per order
 
-- **Smart-cast**: re-pressing a pending single-target heal key casts it on
-  the lowest-HP-fraction wounded ally in range (explicit click-targeting
-  unchanged — pre-healing the Claw victim stays a skill play).
-- **Escape** cancels pending targeting / selection (replacing the old
-  re-press-to-cancel, which smart-cast now uses).
+- **Escape** clears the armed spell. Re-pressing the armed spell is a no-op:
+  every cast requires an explicit target (click an ally or press 1–4), so
+  pre-healing the Claw victim stays a deliberate skill play.
 
 ### Balance evidence
 
@@ -329,9 +327,9 @@ mana regenerates slowly (2.7/s, 100 pool).
 
 The healer is always the implicit caster — there is no unit-selection step.
 Hotkeys (Q W E R) or clicking a spell button **arm** a spell; clicking an ally
-(or pressing 1–4) **casts** it and the spell **stays armed**. Re-pressing the
-armed spell's key smart-casts on the lowest-HP ally. Group Heal still needs a
-target click even though it hits everyone. **There is no queue:** an order
+(or pressing 1–4) **casts** it and the spell **stays armed** (re-pressing the
+armed spell is a no-op). Group Heal still needs a target click even though it
+hits everyone. **There is no queue:** an order
 issued mid-cast **replaces** the cast in progress (mana/cooldown only commit on
 completion, so interrupting wastes nothing); an unaffordable or cooling spell
 greys out and is ignored. `X` stops the cast, `Esc` clears the armed spell,

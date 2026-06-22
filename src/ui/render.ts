@@ -466,7 +466,7 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.textBaseline = "top";
   ctx.fillText(
     armedDef
-      ? `${armedDef.name} armed — click an ally (or press 1-4) to cast · re-press for lowest HP`
+      ? `${armedDef.name} armed — click an ally (or press 1-4) to cast`
       : "Pick a spell (Q W E R or click), then click an ally to heal.",
     PANEL.x + PANEL.w / 2,
     PANEL.y + 10,
@@ -576,7 +576,7 @@ function drawStatusBar(ctx: CanvasRenderingContext2D, state: GameState): void {
 
   ctx.textAlign = "right";
   ctx.fillText(
-    "Q W E R / click a spell · 1-4 / click an ally to cast · re-press = smart-cast · X stop · Esc clear · M mute",
+    "Q W E R / click a spell · 1-4 / click an ally to cast · X stop · Esc clear · M mute",
     CANVAS.w - 12,
     12,
   );
