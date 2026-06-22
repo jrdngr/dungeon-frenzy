@@ -458,6 +458,7 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
   ctx.textBaseline = "bottom";
   for (const ev of state.events) {
     const age = state.elapsedTime - ev.at;
+    if (ev.kind === "level-up") continue; // screen toast, drawn separately (not entity-anchored)
     const e = findEntity(state, ev.entityId);
     if (!e) continue;
     const c = entityCenter(state, e);

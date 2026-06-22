@@ -18,6 +18,7 @@ export interface Hex {
 export type Targeting =
   | "enemy" // the party's focused enemy (party auto-attacks)
   | "ally-single" // one chosen living party member (single-target heals; enemy claw/smash/curse)
+  | "ally-dead" // one chosen DEAD party member (Resurrect)
   | "party-all" // all living party members (AoE heal / enemy AoE)
   | "line"; // enemy linear hit: a primary target plus N-1 random others
 
@@ -30,7 +31,17 @@ export type Effect =
   | { kind: "aoe-heal"; amount: number } // heals all living party
   | { kind: "aoe-damage"; amount: number } // damages all living party (enemy)
   // primary + (count-1) random others. Line = 2, Wide Cleave = 3.
-  | { kind: "line-damage"; amount: number; count: number };
+  | { kind: "line-damage"; amount: number; count: number }
+  // --- Skill-tree additions ---
+  | { kind: "aoe-enemy-damage"; amount: number } // damages all living enemies (mage Firestorm)
+  // A hit-block shield: absorbs the next `hits` whole incoming hits (Shield Wall / Bulwark).
+  | { kind: "shield"; hits: number; scope: "self" | "party-all" }
+  // A timed melee-reflect buff on the caster (tank Thorns).
+  | { kind: "thorns"; pct: number; duration: number }
+  // Restore mana to the healer (mage Arcane Conduit).
+  | { kind: "mana-restore"; amount: number }
+  // Revive a dead ally at a fraction of max HP (Resurrect).
+  | { kind: "revive"; hpFraction: number };
 
 export interface ActionDef {
   id: string;
@@ -73,11 +84,21 @@ export interface Entity {
   maxHp: number;
   mana: number; // 0 for entities without a resource
   maxMana: number; // 0 = no mana bar
+  /** Mana regenerated per second (healer only; raised by Meditation). 0 = none. */
+  manaRegen: number;
   hex: Hex; // party formation; enemies are laid out from row/col by the UI
   current?: ActionInstance; // undefined = idle
   hots: HotInstance[];
-  /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready). */
+  /** Healer-only: spell id -> seconds of cooldown remaining (absent = ready).
+   * Party members reuse this for their auto-cast ability cooldowns. */
   cooldowns: Record<string, number>;
+  /** Absorb shield (skill tree). `hits` = whole incoming hits to fully negate
+   * (Shield Wall / Bulwark), consumed before the `absorb` HP pool (Overheal
+   * Shield, capped at `absorbCap`). Absent = no shield. */
+  shield?: { hits: number; absorb: number; absorbCap: number };
+  /** Active melee-reflect buff on the tank (Thorns): reflect `pct` of melee damage
+   * taken back to the attacker for `remaining` more seconds. Absent = none. */
+  thorns?: { pct: number; remaining: number };
   alive: boolean;
   /** Enemy-only: counts completed actions to drive the attack rotation. */
   actionCount: number;
@@ -96,7 +117,8 @@ export interface Entity {
 export type GameEvent =
   | { kind: "damage"; entityId: string; amount: number; at: number }
   | { kind: "heal"; entityId: string; amount: number; at: number }
-  | { kind: "enrage"; entityId: string; at: number };
+  | { kind: "enrage"; entityId: string; at: number }
+  | { kind: "level-up"; level: number; at: number };
 
 /** Cumulative battle stats for one area attempt, shown on the end overlays. */
 export interface Stats {
@@ -104,6 +126,23 @@ export interface Stats {
   healingDone: number; // effective healing (excludes overheal)
   overhealing: number;
   deaths: number;
+}
+
+/** Which of the three branches a skill node lives in (center "Heal" is `heal`). */
+export type SkillBranch = "heal" | "sustain" | "party";
+
+/** A node in the skill tree. Pure structure: the per-rank *effect* math lives in
+ * skills.ts keyed by id; this only describes cost/prereqs/branch/shape. */
+export interface SkillNode {
+  id: string;
+  name: string;
+  description: string;
+  branch: SkillBranch;
+  /** Node ids that must each have >= 1 rank before this node can be bought. */
+  prereqs: string[];
+  maxRank: number;
+  /** SP cost of each rank; costs.length === maxRank (rank N costs costs[N-1]). */
+  costs: number[];
 }
 
 /** Game flow:
@@ -138,6 +177,14 @@ export interface GameState {
   elapsedTime: number; // seconds the current area attempt has run
   events: GameEvent[];
   stats: Stats;
+  // --- Persistent progression (kept across runs/death like clearedAreas; reset
+  // only by createInitialState). In-memory only — no localStorage. ---
+  totalXp: number; // cumulative XP earned across all runs
+  level: number; // current level (derived from totalXp; starts at 1)
+  skillPoints: number; // unspent skill points
+  skills: Record<string, number>; // node id -> ranks purchased ({ heal: 1 } at start)
+  /** UI-only: the skill-tree overlay is open (only meaningful at the hub). */
+  skillTreeOpen?: boolean;
 }
 
 export function isParty(e: Entity): boolean {

@@ -47,6 +47,11 @@ export function createInitialState(): GameState {
     elapsedTime: 0,
     events: [],
     stats: emptyStats(),
+    totalXp: 0,
+    level: 1,
+    skillPoints: 0,
+    skills: { heal: 1 }, // the center Heal spell starts owned/free
+    skillTreeOpen: false,
   };
 }
 
@@ -56,6 +61,7 @@ interface MakeOpts {
   name: string;
   maxHp: number;
   maxMana?: number;
+  manaRegen?: number;
   hex: Entity["hex"];
   enemyType?: string;
   row?: number;
@@ -71,6 +77,7 @@ function makeEntity(o: MakeOpts): Entity {
     maxHp: o.maxHp,
     mana: o.maxMana ?? 0,
     maxMana: o.maxMana ?? 0,
+    manaRegen: o.manaRegen ?? 0,
     hex: o.hex,
     current: undefined,
     hots: [],
