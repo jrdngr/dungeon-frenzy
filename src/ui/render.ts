@@ -7,9 +7,14 @@ import {
   frontRowEnemies,
 } from "../game/combat";
 import { enemyType, isBossType } from "../game/actions";
-import { xpToReachLevel } from "../game/skills";
-import { CONFIG } from "../game/config";
-import type { ActionDef, Entity, GameState } from "../game/types";
+import {
+  canPurchase,
+  nextNodeCost,
+  rankOf,
+  xpToReachLevel,
+} from "../game/skills";
+import { CONFIG, SKILL_NODES } from "../game/config";
+import type { ActionDef, Entity, GameState, SkillNode } from "../game/types";
 import { isParty } from "../game/types";
 import { ABILITY_KEYS, areaUnlocked, canUse, partySlots } from "./input";
 import {
@@ -27,6 +32,10 @@ import {
   pointInRect,
   progressBarRect,
   quitButtonRect,
+  skillNodePos,
+  skillNodeRect,
+  skillTreeButtonRect,
+  skillTreeCloseRect,
   type Rect,
 } from "./layout";
 
@@ -78,6 +87,7 @@ export function render(
 
   if (state.phase === "area-select") {
     drawHub(ctx, state, mouse);
+    if (state.skillTreeOpen) drawSkillTree(ctx, state, mouse);
     return;
   }
 
@@ -932,6 +942,235 @@ function drawHub(
       ctx.fillText("🔒 Locked", r.x + r.w / 2, r.y + r.h - 16);
     }
   });
+
+  // Skill Tree button — highlighted (green) while there are points to spend.
+  const stb = skillTreeButtonRect();
+  const hov = mouse !== null && pointInRect(mouse, stb);
+  const hasSP = state.skillPoints > 0;
+  ctx.fillStyle = hov ? "#1d2a35" : hasSP ? "#16241c" : "#141923";
+  ctx.fillRect(stb.x, stb.y, stb.w, stb.h);
+  ctx.strokeStyle = hasSP ? COLORS.cleared : "#3a4456";
+  ctx.lineWidth = hasSP || hov ? 2 : 1;
+  ctx.strokeRect(stb.x + 0.5, stb.y + 0.5, stb.w - 1, stb.h - 1);
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Skill Tree", stb.x + stb.w / 2, stb.y + stb.h / 2 - (hasSP ? 8 : 0));
+  if (hasSP) {
+    ctx.fillStyle = COLORS.cleared;
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.fillText(
+      `${state.skillPoints} skill point${state.skillPoints > 1 ? "s" : ""} to spend`,
+      stb.x + stb.w / 2,
+      stb.y + stb.h / 2 + 11,
+    );
+  }
+}
+
+/** The full-screen skill-tree overlay (only over the hub). */
+function drawSkillTree(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point | null,
+): void {
+  ctx.fillStyle = "rgba(8, 10, 14, 0.97)";
+  ctx.fillRect(0, 0, CANVAS.w, CANVAS.h);
+
+  // Header.
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 22px system-ui, sans-serif";
+  ctx.fillText("Skill Tree", 24, 44);
+  ctx.font = "14px system-ui, sans-serif";
+  ctx.fillStyle = COLORS.subtext;
+  ctx.fillText(`Level ${state.level}`, 156, 45);
+  ctx.font = "bold 15px system-ui, sans-serif";
+  ctx.fillStyle = state.skillPoints > 0 ? COLORS.cleared : COLORS.subtext;
+  ctx.fillText(`${state.skillPoints} SP available`, 232, 45);
+
+  // Close button.
+  const close = skillTreeCloseRect();
+  const closeHov = mouse !== null && pointInRect(mouse, close);
+  ctx.fillStyle = closeHov ? "#2a1b1f" : "#1b1115";
+  ctx.fillRect(close.x, close.y, close.w, close.h);
+  ctx.strokeStyle = closeHov ? COLORS.hpLow : "#5a3a40";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(close.x + 0.5, close.y + 0.5, close.w - 1, close.h - 1);
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Close", close.x + close.w / 2, close.y + close.h / 2);
+
+  // Prereq edges (brighter when both ends are owned).
+  ctx.lineWidth = 1.5;
+  for (const node of SKILL_NODES) {
+    const a = skillNodePos(node.id);
+    for (const pid of node.prereqs) {
+      const b = skillNodePos(pid);
+      const owned = rankOf(state.skills, node.id) > 0 && rankOf(state.skills, pid) > 0;
+      ctx.strokeStyle = owned ? COLORS.cleared : "#2c3340";
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+  }
+
+  for (const node of SKILL_NODES) drawSkillNode(ctx, state, node);
+
+  ctx.fillStyle = COLORS.subtext;
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("Click a node to spend a skill point · Esc to close", CANVAS.w / 2, CANVAS.h - 12);
+
+  if (mouse) drawSkillTooltip(ctx, state, mouse);
+}
+
+function drawSkillNode(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  node: SkillNode,
+): void {
+  const r = skillNodeRect(node.id);
+  const rank = rankOf(state.skills, node.id);
+  const maxed = rank >= node.maxRank;
+  const center = node.id === "heal";
+  const check = canPurchase(state, node.id);
+
+  let fill = "#101319";
+  let border = "#262c38";
+  let titleColor = COLORS.locked;
+  if (maxed || (center && rank > 0)) {
+    fill = "#16241c";
+    border = COLORS.cleared;
+    titleColor = COLORS.text;
+  } else if (check.ok) {
+    fill = "#22301f";
+    border = COLORS.armed;
+    titleColor = COLORS.text;
+  } else if (check.reason === "cant-afford") {
+    fill = "#171c25";
+    border = "#3a4456";
+    titleColor = COLORS.text;
+  }
+
+  ctx.fillStyle = fill;
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = border;
+  ctx.lineWidth = maxed || check.ok ? 2 : 1;
+  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+  ctx.fillStyle = titleColor;
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(fitText(ctx, node.name, r.w - 8), r.x + r.w / 2, r.y + 12);
+
+  let info: string;
+  let infoColor = COLORS.subtext;
+  if (center) {
+    info = "owned";
+    infoColor = COLORS.cleared;
+  } else if (maxed) {
+    info = `MAX ${rank}/${node.maxRank}`;
+    infoColor = COLORS.cleared;
+  } else {
+    const cost = nextNodeCost(state.skills, node.id);
+    info = node.maxRank > 1 ? `${rank}/${node.maxRank} · ${cost} SP` : `${cost} SP`;
+    if (check.ok) infoColor = COLORS.armed;
+  }
+  ctx.font = "9px system-ui, sans-serif";
+  ctx.fillStyle = infoColor;
+  ctx.fillText(info, r.x + r.w / 2, r.y + r.h - 9);
+}
+
+function drawSkillTooltip(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point,
+): void {
+  const node = SKILL_NODES.find((n) => pointInRect(mouse, skillNodeRect(n.id)));
+  if (!node) return;
+  const rank = rankOf(state.skills, node.id);
+  const check = canPurchase(state, node.id);
+  const cost = nextNodeCost(state.skills, node.id);
+
+  let status: string;
+  let statusColor = COLORS.subtext;
+  if (node.id === "heal") {
+    status = "Owned (free)";
+    statusColor = COLORS.cleared;
+  } else if (rank >= node.maxRank) {
+    status = `Maxed (${rank}/${node.maxRank})`;
+    statusColor = COLORS.cleared;
+  } else if (check.reason === "locked") {
+    status = "Locked — buy its prerequisite first";
+  } else if (check.reason === "cant-afford") {
+    status = `Rank ${rank}/${node.maxRank} — costs ${cost} SP (not enough)`;
+  } else {
+    status = `Rank ${rank}/${node.maxRank} — click to buy for ${cost} SP`;
+    statusColor = COLORS.armed;
+  }
+
+  const pad = 10;
+  const w = 268;
+  ctx.font = "11px system-ui, sans-serif";
+  const descLines = wrapLines(ctx, node.description, w - pad * 2);
+  const titleH = 20;
+  const lineH = 15;
+  const hgt = pad * 2 + titleH + (descLines.length + 1) * lineH;
+  let x = Math.min(mouse.x + 14, CANVAS.w - 6 - w);
+  let y = Math.min(mouse.y + 14, CANVAS.h - 6 - hgt);
+  x = Math.max(6, x);
+  y = Math.max(6, y);
+
+  ctx.fillStyle = "rgba(12, 15, 21, 0.98)";
+  ctx.fillRect(x, y, w, hgt);
+  ctx.strokeStyle = COLORS.armed;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, hgt - 1);
+
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(node.name, x + pad, y + pad);
+
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillStyle = COLORS.subtext;
+  descLines.forEach((l, i) => ctx.fillText(l, x + pad, y + pad + titleH + i * lineH));
+  ctx.fillStyle = statusColor;
+  ctx.fillText(status, x + pad, y + pad + titleH + descLines.length * lineH);
+}
+
+/** Truncate text with an ellipsis to fit `maxW` at the current font. */
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+  return `${t}…`;
+}
+
+/** Greedy word-wrap into lines that fit `maxW` at the current font. */
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width > maxW && line) {
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function wrapText(

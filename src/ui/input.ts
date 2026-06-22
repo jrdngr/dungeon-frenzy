@@ -12,10 +12,11 @@ import {
   issueOrder,
   returnToHub,
   setFocus,
+  spendSkillPoint,
   startArea,
 } from "../game/engine";
 import { healerSpells } from "../game/skills";
-import { CONFIG } from "../game/config";
+import { CONFIG, SKILL_NODES } from "../game/config";
 import type { ActionDef, Entity, GameState } from "../game/types";
 import { isParty } from "../game/types";
 import {
@@ -25,6 +26,9 @@ import {
   pointInRect,
   pointInToken,
   quitButtonRect,
+  skillNodeRect,
+  skillTreeButtonRect,
+  skillTreeCloseRect,
 } from "./layout";
 
 /** Ability hotkeys, left-to-right onto the healer's spells (up to 5: Q W E R T). */
@@ -76,6 +80,14 @@ export function canUse(state: GameState, def: ActionDef): boolean {
 export function handleClick(state: GameState, p: Point): void {
   // Non-playing phases: the hub picks an area; the interstitials/overlays advance.
   if (state.phase === "area-select") {
+    if (state.skillTreeOpen) {
+      handleSkillTreeClick(state, p);
+      return;
+    }
+    if (pointInRect(p, skillTreeButtonRect())) {
+      state.skillTreeOpen = true;
+      return;
+    }
     for (let i = 0; i < CONFIG.areas.length; i++) {
       if (pointInRect(p, areaCardRect(i)) && areaUnlocked(state, i)) {
         startArea(state, i);
@@ -133,6 +145,10 @@ export function handleKey(state: GameState, rawKey: string): void {
 
   // Non-playing phases: any key continues; the hub also takes 1-N to pick an area.
   if (state.phase !== "playing") {
+    if (state.phase === "area-select" && state.skillTreeOpen) {
+      if (key === "escape") state.skillTreeOpen = false;
+      return;
+    }
     if (state.phase === "fight-cleared") {
       advanceFight(state);
     } else if (state.phase === "area-cleared" || state.phase === "defeat") {
@@ -182,6 +198,21 @@ function castOnTarget(state: GameState, ally: Entity): void {
   if (!def) return;
   if (def.targeting === "ally-dead" ? ally.alive : !ally.alive) return;
   issueOrder(state, h.id, def, ally.id);
+}
+
+/** Clicks inside the skill-tree overlay: close it, or buy the clicked node (the
+ * engine validates prereqs/cost). */
+function handleSkillTreeClick(state: GameState, p: Point): void {
+  if (pointInRect(p, skillTreeCloseRect())) {
+    state.skillTreeOpen = false;
+    return;
+  }
+  for (const node of SKILL_NODES) {
+    if (pointInRect(p, skillNodeRect(node.id))) {
+      spendSkillPoint(state, node.id);
+      return;
+    }
+  }
 }
 
 function onSpellButton(state: GameState, def: ActionDef): void {
