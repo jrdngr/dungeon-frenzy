@@ -24,6 +24,7 @@ import {
   partyFrameRect,
   pointInRect,
   progressBarRect,
+  quitButtonRect,
   type Rect,
 } from "./layout";
 
@@ -80,7 +81,7 @@ export function render(
   drawEntities(ctx, state);
   drawPartyFrames(ctx, state);
   drawFloatingText(ctx, state);
-  drawPanel(ctx, state);
+  drawPanel(ctx, state, mouse);
   drawStatusBar(ctx, state);
 
   if (state.phase === "playing" && mouse) drawSpellTooltip(ctx, mouse);
@@ -490,7 +491,11 @@ function drawFloatingText(ctx: CanvasRenderingContext2D, state: GameState): void
   }
 }
 
-function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
+function drawPanel(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  mouse: Point | null,
+): void {
   ctx.fillStyle = "#10131a";
   ctx.fillRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h);
   ctx.strokeStyle = "#222733";
@@ -537,6 +542,28 @@ function drawPanel(ctx: CanvasRenderingContext2D, state: GameState): void {
       cdRemain: remain,
     });
   });
+
+  drawQuitButton(ctx, mouse);
+}
+
+/** "Quit Area" button: abandon the run and go back to the hub (no progress kept). */
+function drawQuitButton(ctx: CanvasRenderingContext2D, mouse: Point | null): void {
+  const r = quitButtonRect();
+  const hovered = mouse !== null && pointInRect(mouse, r);
+  ctx.fillStyle = hovered ? "#2a1b1f" : "#1b1115";
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = hovered ? COLORS.hpLow : "#5a3a40";
+  ctx.lineWidth = hovered ? 2 : 1;
+  ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+  ctx.fillStyle = hovered ? COLORS.text : COLORS.subtext;
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Quit Area", r.x + r.w / 2, r.y + r.h / 2 - 7);
+  ctx.fillStyle = "#7a818f";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillText("back to map", r.x + r.w / 2, r.y + r.h / 2 + 9);
 }
 
 function HEALER_SPELL(id: string): ActionDef | undefined {

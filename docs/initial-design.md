@@ -377,7 +377,9 @@ later **XP + skill-tree** system; the area-select screen becomes the hub.)
 
 - **5 areas** of fixed, rising difficulty, played from an **area-select hub**.
   Areas unlock **sequentially** (clear one to open the next); a **defeat returns
-  you to the hub** to retry. Cleared progress is in-memory only.
+  you to the hub** to retry. Cleared progress is in-memory only. A **Quit Area**
+  button (bottom panel, beside the spells) abandons the current run mid-fight and
+  returns to the hub **with no progress recorded** (room for rewards-on-clear later).
 - **Each area is 3 fights:** fight 1 = a small pack, fight 2 = a bigger pack,
   fight 3 = a **boss**. **HP and MP carry across the 3 fights.** Between fights
   everyone restores **+10% max HP/MP** and **dead members revive at 10% max HP**
@@ -415,6 +417,11 @@ and area 5 ~50% — a beatable climax with headroom for sharper play; Fast-Heal
 spam and AFK lose 100% everywhere (no infinite sustain). Knobs in `config.ts`:
 per-archetype `maxHp`/damage, per-fight enemy counts (`areas`), `manaRegen` and
 spell costs (campaign economy), `recovery` (between-fight slack).
+
+Recent tuning: `manaRegen` was **halved** (3.0 → 1.5/s) to make mana genuinely
+scarce across an area, and area 1's opener was sharpened — the **Imp** (the basic
+enemy of fights 1–2) now hits for **12** (doubled from 6) so the first two fights
+demand real healing instead of an idle warm-up.
 
 ## Tech
 

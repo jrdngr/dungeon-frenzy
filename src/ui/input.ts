@@ -24,6 +24,7 @@ import {
   partyFrameRect,
   pointInRect,
   pointInToken,
+  quitButtonRect,
 } from "./layout";
 
 /** Ability hotkeys, left-to-right onto the healer's four spells (Q W E R). */
@@ -93,6 +94,12 @@ export function handleClick(state: GameState, p: Point): void {
   }
 
   // Playing.
+  // 0. Quit the area (abandon the run, no progress) and return to the hub.
+  if (pointInRect(p, quitButtonRect())) {
+    returnToHub(state);
+    return;
+  }
+
   // 1. Spell buttons (always the healer's four heals).
   for (const b of actionButtons()) {
     if (pointInRect(p, b.rect)) {

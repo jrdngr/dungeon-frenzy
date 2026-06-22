@@ -38,7 +38,7 @@ export const CONFIG = {
   healer: {
     maxHp: 80,
     maxMana: 100,
-    manaRegen: 3.0, // per second (campaign-long economy spans 3 fights per area)
+    manaRegen: 1.5, // per second (halved: mana is now scarce across an area's 3 fights)
     // HP-per-mana: Renew 3.56 > Slow 2.29 > AoE <=2.35 > Fast 1.10.
     // Fast Heal is the spammable emergency; leaning on it is how you go OOM.
     fastHeal: { castTime: 1.5, cooldown: 0, heal: 22, mana: 20 },
@@ -68,7 +68,8 @@ export const CONFIG = {
   enemyTypes: {
     // Small enemies — die fast; pressure comes from their numbers. They mirror the
     // area boss's base attacks (claw, later light line). Never enrage.
-    a1small: { name: "Imp", maxHp: 60, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 6 } } },
+    // Imps hit hard (12, doubled from 6): area 1's first two fights are a sharp opener.
+    a1small: { name: "Imp", maxHp: 60, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 12 } } },
     a2small: { name: "Kobold", maxHp: 75, rotation: ["claw"], attacks: { claw: { castTime: 2.6, damage: 7 } } },
     a3small: { name: "Gnoll", maxHp: 90, rotation: ["claw"], attacks: { claw: { castTime: 2.5, damage: 8 } } },
     a4small: { name: "Marauder", maxHp: 100, rotation: ["claw", "claw", "line"], attacks: { claw: { castTime: 2.4, damage: 9 }, line: { castTime: 3.2, damage: 6 } } },

@@ -111,6 +111,14 @@ export function actionButtons(): ActionButton[] {
   }));
 }
 
+/** "Quit area" button in the bottom panel (right of the spells): abandons the
+ * current run and returns to the hub with no progress recorded. */
+export function quitButtonRect(): Rect {
+  const w = 104;
+  const h = 44;
+  return { x: PANEL.x + PANEL.w - w - 18, y: PANEL.y + (PANEL.h - h) / 2 + 8, w, h };
+}
+
 /** Area-select hub: one card per area, in a centered row. */
 export function areaCardRect(i: number): Rect {
   const n = CONFIG.areas.length;
