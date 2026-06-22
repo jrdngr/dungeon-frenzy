@@ -6,10 +6,10 @@ job is to keep them alive by juggling timed, mana-costed, cooldown-gated heals.
 The tension is a **mana-starvation race**: your heals out-spend mana regen, so the
 pool drains and you have to win before it runs dry.
 
-You start with a single heal. Killing enemies earns **XP**; levels grant **skill
-points** you spend in a node-based **skill tree** to unlock more heals, raise your
-sustain, and give the party auto-cast abilities (shields, thorns, nukes, AoE,
-DoTs) — enough to push past walls the base kit can't.
+You start with a single heal. Killing enemies grants **skill points** directly
+(more for tougher enemies) that you spend in a node-based **skill tree** to unlock
+more heals, raise your sustain, and give the party auto-cast abilities (shields,
+thorns, nukes, AoE, DoTs) — enough to push past walls the base kit can't.
 
 Built with **TypeScript + HTML5 Canvas + Vite**. Everything is immobile — the hex
 grid is visual layout only.
@@ -43,16 +43,19 @@ to retry; cleared progress is in-memory only.
   whole party; Curse is a hostile damage-over-time on the backline. Late bosses
   **enrage** below 15% HP.
 
-## Progression: XP, levels & the skill tree
+## Progression: the skill tree
 
-Every enemy killed grants **XP** (more for bosses and later areas). Crossing a
-level threshold grants **5 skill points**; XP, level, and points **persist across
-runs and deaths** (in-memory — a page reload resets everything, like cleared
-progress), so you can always grind an area open. A first-try campaign is worth
-~50 SP, about a quarter of the ~175-SP tree.
+Every enemy killed grants **skill points** directly — **1** for trash, **4–14**
+for a boss (scaling by area). Points (and everything you've bought) **persist
+across runs and deaths** (in-memory — a page reload resets everything, like
+cleared progress), so you can always grind an area open. A first-try campaign is
+worth ~84 SP, about a quarter of the ~337-SP tree.
 
-Open the **Skill Tree** from the hub and spend points across three branches that
-radiate from the free center **Heal** node:
+Open the **Skill Tree** from the hub and spend points across five independent
+roots: the free center **Heal** (Healing), **Mana Pool** (Sustain), and **Tank
+Training / Deadeye / Arcane Power** (the three Party sub-trees). Later ranks of a
+node cost progressively more, but you only need **one rank** of a node to unlock
+the next.
 
 - **Healing** — unlock Quick Heal, Regen, Group Heal, and Resurrect, plus per-spell
   potency / efficiency / cast-time upgrades.
@@ -113,8 +116,8 @@ src/game/                Pure simulation — NO canvas/DOM imports here.
   skills.ts              Pure skill-tree derivation: turns purchased skills into
                          effective stats, the healer's bar, and party abilities.
   engine.ts              createInitialState/startArea/advanceFight + update(): the
-                         simulation, the area -> fight progression, XP/leveling,
-                         and spendSkillPoint.
+                         simulation, the area -> fight progression, skill points
+                         on kill, and spendSkillPoint.
 src/ui/                  Rendering + input — all canvas/DOM lives here.
   layout.ts              Screen geometry (entity positions, bars, buttons) + hit-testing.
   render.ts              Draws everything from GameState; never mutates it.

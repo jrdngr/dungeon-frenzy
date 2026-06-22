@@ -4,12 +4,12 @@ A real-time **healing game**: you play the party's healer, keeping a fixed,
 auto-fighting party (tank + ranger + mage + you) alive by juggling timed,
 mana-costed, cooldown-gated heals. Iteration 8 grew it into a **campaign**: a hub
 of **5 areas**, each **3 fights** (small pack → bigger pack → boss) where HP/MP
-carry across the fights of an area. Iteration 9 added **progression**: killing
-enemies grants XP, levels grant skill points, and a node-based **skill tree**
-(opened from the hub) unlocks/upgrades heals, sustain, and auto-cast party
-abilities (shields, thorns, nukes, AoE, DoTs). You start with only **Heal**;
-XP/level/SP persist across runs and death (in-memory), so a player can always
-grind an area open. Enemies fight in **front/back rows** — the party focus-fires
+carry across the fights of an area. Iteration 9 added **progression**: killing an
+enemy grants **skill points** directly (scaled by difficulty), spent in a
+node-based **skill tree** (opened from the hub) that unlocks/upgrades heals,
+sustain, and auto-cast party abilities (shields, thorns, nukes, AoE, DoTs). You
+start with only **Heal**; skill points and purchased skills persist across runs
+and death (in-memory), so a player can always grind an area open. Enemies fight in **front/back rows** — the party focus-fires
 one front-row enemy (click it; back-row enemies are shielded until the front row
 dies). Everything is immobile; the hex grid is visual layout only. Built with
 TypeScript + HTML5 Canvas + Vite. See `README.md` for a high-level overview of the
@@ -31,7 +31,7 @@ src/main.ts              Wires up the canvas and runs the requestAnimationFrame 
 src/style.css            Page styling.
 src/game/                Pure simulation — NO canvas/DOM imports here.
   config.ts              ALL tunable balance: party/healer stats, enemy archetypes,
-                         the 5 areas x 3 fights, XP/level curve, and SKILL_NODES.
+                         the 5 areas x 3 fights, per-enemy SP, and SKILL_NODES.
   types.ts               Core data model (Entity, ActionDef, GameState, SkillNode...).
   hex.ts                 Axial hex coordinates + hex->pixel layout.
   actions.ts             Static action defs + the enemy-archetype attack registry.
@@ -40,8 +40,8 @@ src/game/                Pure simulation — NO canvas/DOM imports here.
   skills.ts              Pure skill-tree derivation: purchased skills -> effective
                          stats, the healer's dynamic bar, and party abilities.
   engine.ts              createInitialState/startArea/advanceFight + update(): the
-                         simulation, the area -> fight progression, XP/leveling,
-                         and spendSkillPoint.
+                         simulation, the area -> fight progression, skill points
+                         on kill, and spendSkillPoint.
 src/ui/                  Rendering + input — all canvas/DOM lives here.
   layout.ts              Screen geometry (entity positions, bars, buttons, skill
                          tree node positions) + hit-testing.
