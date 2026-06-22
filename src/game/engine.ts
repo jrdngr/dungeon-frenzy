@@ -34,16 +34,18 @@ import { isDPS, isParty } from "./types";
 /** How long finished events are kept around for the UI to animate. */
 const EVENT_TTL = 3.0;
 
-/** Build a fresh battle: the party holds a fixed formation facing the enemy.
- * Tank in front (it soaks the enemy's focus), ranger + mage flanking the middle
- * row, the healer (you) safe in the back. Everything is immobile. */
+/** Build a fresh battle: the party holds a fixed formation facing the enemy in a
+ * vertical column. Top to bottom — enemy, tank (it soaks the enemy's focus),
+ * ranger + mage flanking the middle row, the healer (you) safe in the back.
+ * Enemy / tank / healer share the centered column (q + r/2 = 0 keeps x = 0);
+ * the enemy sits two rows up so an empty row gaps it off the tank. Immobile. */
 export function createInitialState(): GameState {
   const entities: Entity[] = [
-    makeEntity("enemy", "enemy", "Ogre", CONFIG.enemy.maxHp, 0, { q: 0, r: -3 }),
-    makeEntity("tank", "tank", "Tank", CONFIG.tank.maxHp, 0, { q: 0, r: -1 }),
-    makeEntity("ranger", "ranger", "Ranger", CONFIG.ranger.maxHp, 0, { q: -1, r: 0 }),
-    makeEntity("mage", "mage", "Mage", CONFIG.mage.maxHp, 0, { q: 1, r: 0 }),
-    makeEntity("healer", "healer", "Healer", CONFIG.healer.maxHp, CONFIG.healer.maxMana, { q: 0, r: 2 }),
+    makeEntity("enemy", "enemy", "Ogre", CONFIG.enemy.maxHp, 0, { q: 1, r: -2 }),
+    makeEntity("tank", "tank", "Tank", CONFIG.tank.maxHp, 0, { q: 0, r: 0 }),
+    makeEntity("ranger", "ranger", "Ranger", CONFIG.ranger.maxHp, 0, { q: -1, r: 1 }),
+    makeEntity("mage", "mage", "Mage", CONFIG.mage.maxHp, 0, { q: 0, r: 1 }),
+    makeEntity("healer", "healer", "Healer", CONFIG.healer.maxHp, CONFIG.healer.maxMana, { q: -1, r: 2 }),
   ];
 
   const state: GameState = {

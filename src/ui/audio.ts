@@ -9,7 +9,7 @@
 import type { GamePhase, GameState } from "../game/types";
 
 let ctx: AudioContext | null = null;
-let muted = false;
+let muted = true; // sound off by default; the M key toggles it back on
 
 let lastEventAt = 0;
 let prevPhase: GamePhase = "playing";
