@@ -36,6 +36,7 @@ import {
   skillNodeRect,
   skillTreeButtonRect,
   skillTreeCloseRect,
+  skillTreeDevSpRect,
   type Rect,
 } from "./layout";
 
@@ -1020,6 +1021,23 @@ function drawSkillTree(
   }
 
   for (const node of SKILL_NODES) drawSkillNode(ctx, state, node);
+
+  // Dev-only "+5 SP" button (dashed purple, clearly not part of the tree).
+  const dev = skillTreeDevSpRect();
+  const devHov = mouse !== null && pointInRect(mouse, dev);
+  ctx.fillStyle = devHov ? "#2a2440" : "#1c1830";
+  ctx.fillRect(dev.x, dev.y, dev.w, dev.h);
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = COLORS.mage;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(dev.x + 0.5, dev.y + 0.5, dev.w - 1, dev.h - 1);
+  ctx.restore();
+  ctx.fillStyle = COLORS.mage;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("+5 SP (dev)", dev.x + dev.w / 2, dev.y + dev.h / 2);
 
   ctx.fillStyle = COLORS.subtext;
   ctx.font = "12px system-ui, sans-serif";

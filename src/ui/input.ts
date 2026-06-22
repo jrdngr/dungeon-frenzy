@@ -29,6 +29,7 @@ import {
   skillNodeRect,
   skillTreeButtonRect,
   skillTreeCloseRect,
+  skillTreeDevSpRect,
 } from "./layout";
 
 /** Ability hotkeys, left-to-right onto the healer's spells (up to 5: Q W E R T). */
@@ -205,6 +206,10 @@ function castOnTarget(state: GameState, ally: Entity): void {
 function handleSkillTreeClick(state: GameState, p: Point): void {
   if (pointInRect(p, skillTreeCloseRect())) {
     state.skillTreeOpen = false;
+    return;
+  }
+  if (pointInRect(p, skillTreeDevSpRect())) {
+    state.skillPoints += 5; // dev helper for testing the tree
     return;
   }
   for (const node of SKILL_NODES) {

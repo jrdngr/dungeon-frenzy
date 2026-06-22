@@ -218,6 +218,11 @@ export function skillTreeCloseRect(): Rect {
   return { x: CANVAS.w - 104, y: 26, w: 88, h: 34 };
 }
 
+/** Dev-only "+5 SP" button (bottom-left of the overlay) for testing the tree. */
+export function skillTreeDevSpRect(): Rect {
+  return { x: 16, y: CANVAS.h - 48, w: 132, h: 32 };
+}
+
 export function pointInRect(p: Point, r: Rect): boolean {
   return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
