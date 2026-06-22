@@ -267,6 +267,12 @@ function startAction(
 
   let resolved = targetId;
   if (def.targeting === "enemy" && !resolved) resolved = frontmostEnemy(state)?.id;
+
+  // Re-issuing the same spell on the same target mid-cast keeps the existing cast
+  // going — don't restart the progress bar. Only a different spell or target does.
+  const cur = caster.current;
+  if (cur && cur.def.id === def.id && cur.targetId === resolved) return cur;
+
   caster.current = { def, elapsed: 0, targetId: resolved, victimIds };
   return caster.current;
 }
