@@ -127,7 +127,9 @@ export function startArea(state: GameState, areaIndex: number): void {
 
 /** Spawn a fight's enemies and reset per-fight transient party state (clear casts/
  * HoTs/DoTs, reset cooldowns). HP/MP carry over; only the between-fight recovery
- * (applyRecovery) changes them. */
+ * (applyRecovery) changes them. The armed spell carries over too, so the player
+ * keeps their selected heal between an area's fights; startArea clears it on a
+ * fresh area entry. */
 function startFight(state: GameState, fightIndex: number): void {
   state.fightIndex = fightIndex;
   state.entities = state.entities.filter((e) => e.kind !== "enemy");
@@ -136,7 +138,6 @@ function startFight(state: GameState, fightIndex: number): void {
     e.hots = [];
     e.cooldowns = {};
   }
-  state.armedSpellId = undefined;
 
   const fight = CONFIG.areas[state.areaIndex].fights[fightIndex];
   fight.enemies.forEach((p, i) => {
