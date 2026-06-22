@@ -3,6 +3,8 @@
 
 import type { AutoAttackerKind, Entity, GameState, HotInstance } from "./types";
 import { isAutoAttacker, isDPS, isParty } from "./types";
+import { enemyType } from "./actions";
+import { overhealShieldCap } from "./skills";
 
 export function findEntity(state: GameState, id: string): Entity | undefined {
   return state.entities.find((e) => e.id === id);
@@ -74,15 +76,31 @@ export function frontmostLiving(state: GameState): Entity | undefined {
   return enemyTargetPriority(state, (dps) => dps[0]);
 }
 
+/** Apply `amount` damage to a target, returning the HP actually removed (after any
+ * absorb shield). Grants XP and marks death when an enemy is killed. */
 export function applyDamage(
   state: GameState,
   target: Entity,
   amount: number,
-): void {
-  if (!target.alive) return;
+): number {
+  if (!target.alive) return 0;
+
+  // Absorb shield (skill tree): a hit-block charge negates the whole hit; otherwise
+  // the absorb pool soaks first. Either way HP only takes what's left.
+  let incoming = amount;
+  if (target.shield) {
+    if (target.shield.hits > 0) {
+      target.shield.hits -= 1;
+      incoming = 0;
+    } else if (target.shield.absorb > 0) {
+      const soak = Math.min(incoming, target.shield.absorb);
+      target.shield.absorb -= soak;
+      incoming -= soak;
+    }
+  }
 
   const before = target.hp;
-  target.hp = Math.max(0, target.hp - amount);
+  target.hp = Math.max(0, target.hp - incoming);
   const dealt = before - target.hp;
 
   if (!isParty(target)) state.stats.damageDealt += dealt;
@@ -97,7 +115,9 @@ export function applyDamage(
   if (target.hp === 0) {
     target.alive = false;
     if (isParty(target)) state.stats.deaths += 1;
+    else state.totalXp += enemyType(target.enemyType!).xp;
   }
+  return dealt;
 }
 
 export function applyHeal(
@@ -111,7 +131,16 @@ export function applyHeal(
   const healed = target.hp - before;
 
   state.stats.healingDone += healed;
-  state.stats.overhealing += amount - healed;
+  const overheal = amount - healed;
+  state.stats.overhealing += overheal;
+
+  // Overheal Shield (skill tree): spill overhealing into a capped absorb pool.
+  const cap = overhealShieldCap(state.skills);
+  if (overheal > 0 && cap > 0 && isParty(target)) {
+    if (!target.shield) target.shield = { hits: 0, absorb: 0, absorbCap: cap };
+    target.shield.absorbCap = cap;
+    target.shield.absorb = Math.min(cap, target.shield.absorb + overheal);
+  }
 
   if (healed > 0) {
     state.events.push({

@@ -34,15 +34,16 @@ export const MAGE_ATTACK: ActionDef = {
   effect: { kind: "damage", amount: c.mage.attack.damage },
 };
 
-/** The auto-attack for a given attacker kind. */
-export function autoAttackFor(kind: AutoAttackerKind): ActionDef {
+/** The auto-attack for a given attacker kind, with skill-derived damage (the base
+ * defs supply id/name/castTime; Heavy Strikes / Deadeye / Arcane Power raise dmg). */
+export function autoAttackFor(kind: AutoAttackerKind, damage: number): ActionDef {
   switch (kind) {
     case "tank":
-      return TANK_ATTACK;
+      return { ...TANK_ATTACK, effect: { kind: "damage", amount: damage } };
     case "ranger":
-      return RANGER_ATTACK;
+      return { ...RANGER_ATTACK, effect: { kind: "damage", amount: damage } };
     case "mage":
-      return MAGE_ATTACK;
+      return { ...MAGE_ATTACK, effect: { kind: "damage", amount: damage } };
   }
 }
 
@@ -107,6 +108,8 @@ export interface EnemyTypeActions {
   name: string;
   isBoss: boolean;
   maxHp: number;
+  /** XP granted to the player when this enemy is killed. */
+  xp: number;
   rotation: string[];
   /** Attack key -> ActionDef. `enraged` is empty unless the type enrages. */
   normal: Record<string, ActionDef>;
@@ -158,6 +161,7 @@ function buildEnemyType(id: string, def: any): EnemyTypeActions {
     name: def.name,
     isBoss: !!def.isBoss,
     maxHp: def.maxHp,
+    xp: def.xp,
     rotation: [...def.rotation],
     normal,
     enraged,

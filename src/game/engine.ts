@@ -17,14 +17,25 @@ import {
   livingParty,
   tickHots,
 } from "./combat";
+import {
+  canPurchase,
+  critHealChance,
+  effectiveHealer,
+  effectiveParty,
+  effectiveRecovery,
+  levelForXp,
+  nextNodeCost,
+  partyAbilities,
+} from "./skills";
 import type {
   ActionDef,
   ActionInstance,
+  AutoAttackerKind,
   Entity,
   GameState,
   Stats,
 } from "./types";
-import { isDPS } from "./types";
+import { isDPS, isParty } from "./types";
 
 /** How long finished events are kept around for the UI to animate. */
 const EVENT_TTL = 3.0;
@@ -102,11 +113,14 @@ export function startArea(state: GameState, areaIndex: number): void {
   state.events = [];
   state.stats = emptyStats();
   state.armedSpellId = undefined;
+  // Layer skill-tree bonuses onto the base config when the party is (re)built.
+  const party = effectiveParty(state.skills);
+  const healer = effectiveHealer(state.skills);
   state.entities = [
-    makeEntity({ id: "tank", kind: "tank", name: "Tank", maxHp: CONFIG.tank.maxHp, hex: { q: 0, r: 0 } }),
-    makeEntity({ id: "ranger", kind: "ranger", name: "Ranger", maxHp: CONFIG.ranger.maxHp, hex: { q: -1, r: 1 } }),
-    makeEntity({ id: "mage", kind: "mage", name: "Mage", maxHp: CONFIG.mage.maxHp, hex: { q: 0, r: 1 } }),
-    makeEntity({ id: "healer", kind: "healer", name: "Healer", maxHp: CONFIG.healer.maxHp, maxMana: CONFIG.healer.maxMana, hex: { q: -1, r: 2 } }),
+    makeEntity({ id: "tank", kind: "tank", name: "Tank", maxHp: party.tank.maxHp, hex: { q: 0, r: 0 } }),
+    makeEntity({ id: "ranger", kind: "ranger", name: "Ranger", maxHp: party.ranger.maxHp, hex: { q: -1, r: 1 } }),
+    makeEntity({ id: "mage", kind: "mage", name: "Mage", maxHp: party.mage.maxHp, hex: { q: 0, r: 1 } }),
+    makeEntity({ id: "healer", kind: "healer", name: "Healer", maxHp: CONFIG.healer.maxHp, maxMana: healer.maxMana, manaRegen: healer.manaRegen, hex: { q: -1, r: 2 } }),
   ];
   startFight(state, 0);
 }
@@ -149,7 +163,7 @@ function startFight(state: GameState, fightIndex: number): void {
 /** Between-fight recovery: living members +10% max HP, healer +10% max mana, dead
  * members revive at 10% max HP. (Knobs in CONFIG.recovery.) */
 function applyRecovery(state: GameState): void {
-  const rec = CONFIG.recovery;
+  const rec = effectiveRecovery(state.skills);
   for (const e of state.entities) {
     if (e.kind === "enemy") continue;
     if (!e.alive) {
@@ -170,13 +184,36 @@ export function advanceFight(state: GameState): void {
   startFight(state, state.fightIndex + 1);
 }
 
-/** Return to the area-select hub (from an end overlay), keeping cleared progress. */
+/** Return to the area-select hub (from an end overlay), keeping cleared progress.
+ * Progression (totalXp/level/skillPoints/skills) persists — it is never reset here. */
 export function returnToHub(state: GameState): void {
   state.phase = "area-select";
   state.entities = [];
   state.armedSpellId = undefined;
   state.focusedEnemyId = undefined;
   state.events = [];
+}
+
+/** Award skill points for any levels reached from XP banked this update. */
+function reconcileLevel(state: GameState): void {
+  const target = levelForXp(state.totalXp);
+  while (state.level < target) {
+    state.level += 1;
+    state.skillPoints += CONFIG.progression.spPerLevel;
+    state.events.push({ kind: "level-up", level: state.level, at: state.elapsedTime });
+  }
+}
+
+/** Spend a skill point on the next rank of a node (hub only). Returns whether it
+ * succeeded (prereqs met, not maxed, enough SP). */
+export function spendSkillPoint(state: GameState, nodeId: string): boolean {
+  if (state.phase !== "area-select") return false;
+  if (!canPurchase(state, nodeId).ok) return false;
+  const cost = nextNodeCost(state.skills, nodeId);
+  if (cost === null) return false;
+  state.skills[nodeId] = (state.skills[nodeId] ?? 0) + 1;
+  state.skillPoints -= cost;
+  return true;
 }
 
 /** Set the party's focus-fire target. Only a living front-row enemy is allowed. */
@@ -200,6 +237,9 @@ function validateOrder(
   if (def.targeting === "enemy") {
     const t = targetId ? findEntity(state, targetId) : frontmostEnemy(state);
     if (!t || !t.alive || t.kind !== "enemy") return false;
+  } else if (def.targeting === "ally-dead") {
+    const t = targetId ? findEntity(state, targetId) : undefined;
+    if (!t || t.alive || !isParty(t)) return false; // Resurrect needs a DEAD ally
   } else if (targetId) {
     const t = findEntity(state, targetId);
     if (!t || !t.alive) return false;
@@ -309,15 +349,58 @@ function startEnemyAction(state: GameState, e: Entity): void {
   }
 }
 
-/** Attackers never stand around: any idle tank/ranger/mage auto-casts its swing at
- * the party's focused enemy (fallback: the frontmost living enemy). */
+/** The first off-cooldown auto-cast ability for an attacker (partyAbilities is
+ * pre-sorted longest-cooldown first), or undefined to fall back to the basic swing. */
+function readyAbility(
+  state: GameState,
+  a: Entity & { kind: AutoAttackerKind },
+): ActionDef | undefined {
+  return partyAbilities(a.kind, state.skills).find(
+    (def) => (a.cooldowns[def.id] ?? 0) <= 0,
+  );
+}
+
+/** Victims for a party Volley: the focus plus (count-1) other front-row enemies. */
+function pickEnemyLineVictims(
+  state: GameState,
+  focusId: string,
+  count: number,
+): string[] {
+  const others = frontRowEnemies(state).filter((e) => e.id !== focusId);
+  for (let i = others.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [others[i], others[j]] = [others[j], others[i]];
+  }
+  return [focusId, ...others.slice(0, Math.max(0, count - 1)).map((e) => e.id)];
+}
+
+/** Attackers never stand around: any idle tank/ranger/mage casts a ready skill-tree
+ * ability (shields/nukes/AoE/DoT) at the focus, else its basic swing. */
 function startAutoAttacks(state: GameState): void {
   const focusId = focusedEnemy(state)?.id ?? frontmostEnemy(state)?.id;
   if (!focusId) return;
+  const party = effectiveParty(state.skills);
   for (const a of autoAttackers(state)) {
     if (!a.alive || a.current) continue;
-    startAction(state, a.id, autoAttackFor(a.kind), focusId);
+    const ability = readyAbility(state, a);
+    if (ability) {
+      const victimIds =
+        ability.effect.kind === "line-damage"
+          ? pickEnemyLineVictims(state, focusId, ability.effect.count)
+          : undefined;
+      const targetId = ability.targeting === "enemy" ? focusId : undefined;
+      startAction(state, a.id, ability, targetId, victimIds);
+    } else {
+      startAction(state, a.id, autoAttackFor(a.kind, party[a.kind].attackDamage), focusId);
+    }
   }
+}
+
+/** Refresh an entity's hit-block shield to at least `hits` charges, preserving its
+ * absorb pool (both shield flavors coexist on one struct). */
+function grantHitShield(e: Entity, hits: number): void {
+  if (!e.shield) e.shield = { hits: 0, absorb: 0, absorbCap: 0 };
+  e.shield.hits = Math.max(e.shield.hits, hits);
 }
 
 /** Resolve a completed action's effect, spending mana and starting its cooldown. */
@@ -329,6 +412,10 @@ function resolveAction(state: GameState, caster: Entity): void {
   if (def.manaCost !== undefined) caster.mana = Math.max(0, caster.mana - def.manaCost);
   if (def.cooldown) caster.cooldowns[def.id] = def.cooldown;
 
+  // Crit Heals: a healer cast may land at 1.5x (rolled once per cast).
+  const critMult =
+    caster.kind === "healer" && Math.random() < critHealChance(state.skills) ? 1.5 : 1;
+
   switch (def.effect.kind) {
     case "damage": {
       let target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
@@ -338,12 +425,18 @@ function resolveAction(state: GameState, caster: Entity): void {
             ? frontmostLiving(state)
             : focusedEnemy(state) ?? frontmostEnemy(state);
       }
-      if (target && target.alive) applyDamage(state, target, def.effect.amount);
+      if (target && target.alive) {
+        const dealt = applyDamage(state, target, def.effect.amount);
+        // Thorns: an enemy melee hit on a buffed tank reflects damage to the attacker.
+        if (caster.kind === "enemy" && target.thorns && target.thorns.remaining > 0 && dealt > 0) {
+          applyDamage(state, caster, dealt * target.thorns.pct);
+        }
+      }
       break;
     }
     case "heal": {
       const target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
-      if (target && target.alive) applyHeal(state, target, def.effect.amount);
+      if (target && target.alive) applyHeal(state, target, def.effect.amount * critMult);
       break;
     }
     case "hot":
@@ -361,15 +454,48 @@ function resolveAction(state: GameState, caster: Entity): void {
       break;
     }
     case "aoe-heal":
-      for (const p of livingParty(state)) applyHeal(state, p, def.effect.amount);
+      for (const p of livingParty(state)) applyHeal(state, p, def.effect.amount * critMult);
       break;
     case "aoe-damage":
       for (const p of livingParty(state)) applyDamage(state, p, def.effect.amount);
+      break;
+    case "aoe-enemy-damage":
+      // Front-row only — back-row enemies stay shielded until the front clears.
+      for (const e of frontRowEnemies(state)) applyDamage(state, e, def.effect.amount);
       break;
     case "line-damage": {
       for (const id of inst.victimIds ?? []) {
         const v = findEntity(state, id);
         if (v && v.alive) applyDamage(state, v, def.effect.amount);
+      }
+      break;
+    }
+    case "shield": {
+      if (def.effect.scope === "party-all") {
+        for (const p of livingParty(state)) grantHitShield(p, def.effect.hits);
+      } else {
+        grantHitShield(caster, def.effect.hits);
+      }
+      break;
+    }
+    case "thorns":
+      caster.thorns = { pct: def.effect.pct, remaining: def.effect.duration };
+      break;
+    case "mana-restore": {
+      const healer = state.entities.find((e) => e.kind === "healer" && e.alive);
+      if (healer && healer.maxMana > 0) {
+        healer.mana = Math.min(healer.maxMana, healer.mana + def.effect.amount);
+      }
+      break;
+    }
+    case "revive": {
+      const target = inst.targetId ? findEntity(state, inst.targetId) : undefined;
+      if (target && !target.alive && isParty(target)) {
+        target.alive = true;
+        target.hp = Math.max(1, Math.round(target.maxHp * def.effect.hpFraction));
+        target.hots = [];
+        target.current = undefined;
+        state.events.push({ kind: "heal", entityId: target.id, amount: target.hp, at: state.elapsedTime });
       }
       break;
     }
@@ -386,7 +512,11 @@ export function update(state: GameState, dt: number): void {
   for (const e of state.entities) {
     if (!e.alive) continue;
     if (e.maxMana > 0) {
-      e.mana = Math.min(e.maxMana, e.mana + CONFIG.healer.manaRegen * dt);
+      e.mana = Math.min(e.maxMana, e.mana + e.manaRegen * dt);
+    }
+    if (e.thorns) {
+      e.thorns.remaining -= dt;
+      if (e.thorns.remaining <= 0) e.thorns = undefined;
     }
     for (const id in e.cooldowns) {
       e.cooldowns[id] -= dt;
@@ -417,6 +547,9 @@ export function update(state: GameState, dt: number): void {
   if (livingParty(state).length > 0) {
     for (const e of enemies(state)) if (!e.current) startEnemyAction(state, e);
   }
+
+  // 2c. Award levels / skill points for any XP banked this frame.
+  reconcileLevel(state);
 
   // 3. Per-enemy enrage when an enemy drops below its threshold.
   for (const e of enemies(state)) {
